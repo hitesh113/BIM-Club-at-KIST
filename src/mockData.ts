@@ -74,6 +74,32 @@ export const mockSnapshot: ClubSnapshot = {
     { id: 'don-03', name: 'KIST IT Department', purpose: 'Workshop equipment', amount: 10000, date: '2026-09-20', status: 'Received' },
     { id: 'don-04', name: 'Maya Adhikari', purpose: 'General fund', amount: 2000, date: '2026-10-05', status: 'Pending' },
   ],
+  attendance: [
+    { id: 'att-001', eventId: 'evt-104', registrationId: 'reg-006', memberId: 'member-104', memberName: 'Nischal Thapa', date: '2026-09-19', checkInTime: '12:48', status: 'Verified', method: 'QR', verifiedBy: 'Sujan Karki' },
+    { id: 'att-002', eventId: 'evt-104', registrationId: 'reg-007', memberId: 'member-105', memberName: 'Sanjana Gurung', date: '2026-09-19', checkInTime: '12:53', status: 'Verified', method: 'QR', verifiedBy: 'Sujan Karki' },
+    { id: 'att-003', eventId: 'evt-105', registrationId: 'reg-008', memberId: 'member-106', memberName: 'Rohan Basnet', date: '2026-08-22', checkInTime: '09:21', status: 'Verified', method: 'QR', verifiedBy: 'Sujan Karki' },
+  ],
+  files: [
+    { id: 'file-001', name: 'October event notice.pdf', type: 'PDF', category: 'Notices', uploadDate: '2026-10-04', uploadedBy: 'Maya Adhikari', size: '418 KB' },
+    { id: 'file-002', name: 'Hackathon 2026 brief.pdf', type: 'PDF', category: 'Event Documents', uploadDate: '2026-10-02', uploadedBy: 'Sujan Karki', size: '1.8 MB' },
+    { id: 'file-003', name: 'BIM Club constitution.pdf', type: 'PDF', category: 'Club Guidelines', uploadDate: '2026-09-12', uploadedBy: 'Maya Adhikari', size: '1.2 MB' },
+    { id: 'file-004', name: 'Semester participation report.xlsx', type: 'XLSX', category: 'Reports', uploadDate: '2026-10-01', uploadedBy: 'Maya Adhikari', size: '96 KB' },
+    { id: 'file-005', name: 'Workshop facilitation guide.docx', type: 'DOCX', category: 'Other', uploadDate: '2026-09-24', uploadedBy: 'Sujan Karki', size: '284 KB' },
+  ],
+  notifications: [
+    { id: 'note-001', title: 'Event registration successful', detail: 'You are registered for Web Development Workshop.', timestamp: '18m ago', read: false, recipient: 'Participant' },
+    { id: 'note-002', title: 'Event reminder', detail: 'UI/UX Design Workshop is coming up on October 28.', timestamp: '2h ago', read: false, recipient: 'All' },
+    { id: 'note-003', title: 'Registration closing', detail: 'Hackathon 2026 registration closes November 10.', timestamp: 'Yesterday', read: true, recipient: 'All' },
+    { id: 'note-004', title: 'Attendance recorded', detail: 'Your QR verification for Career & Technology Seminar is complete.', timestamp: 'Sep 19', read: true, recipient: 'Participant' },
+    { id: 'note-005', title: 'Donation successful', detail: 'NPR 1,500 contribution received. Thank you.', timestamp: 'Sep 28', read: true, recipient: 'Participant' },
+  ],
+  activityLog: [
+    { id: 'log-001', user: 'Maya Adhikari', action: 'Admin created an event: Hackathon 2026', timestamp: 'Today, 9:14 AM' },
+    { id: 'log-002', user: 'Sujan Karki', action: 'BOD uploaded Hackathon 2026 brief.pdf', timestamp: 'Yesterday, 4:22 PM' },
+    { id: 'log-003', user: 'Aarav Shrestha', action: 'Participant registered for UI/UX Design Workshop', timestamp: 'Oct 3, 11:08 AM' },
+    { id: 'log-004', user: 'Sujan Karki', action: 'BOD recorded attendance for Nischal Thapa', timestamp: 'Sep 19, 12:48 PM' },
+    { id: 'log-005', user: 'Maya Adhikari', action: 'Admin changed a user role', timestamp: 'Sep 16, 2:05 PM' },
+  ],
   members: [
     { id: 'member-100', name: 'Aarav Shrestha', email: 'aarav.shrestha@kist.edu.np', role: 'Participant', joined: '2026-02-14', points: 840 },
     { id: 'member-101', name: 'Prakriti Rai', email: 'prakriti.rai@kist.edu.np', role: 'Participant', joined: '2026-03-01', points: 1120 },

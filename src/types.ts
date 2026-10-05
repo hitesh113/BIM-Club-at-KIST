@@ -36,10 +36,50 @@ export type Registration = {
 export type Donation = {
   id: string
   name: string
+  memberId?: string
   purpose: string
   amount: number
   date: string
   status: 'Received' | 'Pending'
+}
+
+export type AttendanceRecord = {
+  id: string
+  eventId: string
+  registrationId: string
+  memberId: string
+  memberName: string
+  date: string
+  checkInTime: string
+  status: 'Verified'
+  method: 'QR'
+  verifiedBy: string
+}
+
+export type ClubFile = {
+  id: string
+  name: string
+  type: string
+  category: 'Notices' | 'Event Documents' | 'Club Guidelines' | 'Reports' | 'Other'
+  uploadDate: string
+  uploadedBy: string
+  size: string
+}
+
+export type Notification = {
+  id: string
+  title: string
+  detail: string
+  timestamp: string
+  read: boolean
+  recipient: Role | 'All'
+}
+
+export type ActivityLogEntry = {
+  id: string
+  user: string
+  action: string
+  timestamp: string
 }
 
 export type Member = {
@@ -56,4 +96,8 @@ export type ClubSnapshot = {
   registrations: Registration[]
   donations: Donation[]
   members: Member[]
+  attendance: AttendanceRecord[]
+  files: ClubFile[]
+  notifications: Notification[]
+  activityLog: ActivityLogEntry[]
 }
