@@ -25,6 +25,8 @@ button:disabled{cursor:not-allowed}
 .public-nav .public-active:after{content:'';position:absolute;right:0;bottom:0;left:0;height:2px;background:#71a982}
 .public-login{min-height:39px}
 .public-main{min-height:calc(100vh - 76px)}
+.public-page-action{margin-bottom:24px}
+.public-back-home{background:#fff}
 .landing-page{background:#fff}
 .landing-hero{min-height:498px;padding:56px max(8vw,48px) 47px;display:grid;grid-template-columns:.91fr 1.09fr;align-items:center;gap:5.5vw;position:relative;overflow:hidden;background:#174a38;color:#fff}
 .landing-hero:after{content:'';position:absolute;top:-180px;right:-115px;width:530px;height:530px;border:1px solid #ffffff17;border-radius:50%;box-shadow:0 0 0 60px #ffffff08,0 0 0 120px #ffffff05;pointer-events:none}
