@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Activity, ArrowDownToLine, ArrowRight, ArrowUpRight, Bell, CalendarDays,
   Check, CheckCircle2, ChevronDown, ChevronLeft, Clock, CreditCard, FileText,
@@ -32,6 +32,17 @@ const pageTitles: Record<Page, string> = {
 const chartData = [
   { month: 'May', attendees: 46 }, { month: 'Jun', attendees: 68 }, { month: 'Jul', attendees: 55 },
   { month: 'Aug', attendees: 92 }, { month: 'Sep', attendees: 74 }, { month: 'Oct', attendees: 118 },
+]
+const bodMembers = [
+  { name: 'Shishir Joshi', position: 'President', image: '' },
+  { name: 'Aliza Aryal', position: 'Vice President', image: '' },
+  { name: 'Shreesha Mahat', position: 'Secretary', image: '' },
+  { name: 'Sadhana Kushma', position: 'Treasurer', image: '' },
+  { name: 'Rajiv Shrestha', position: 'Technical Coordinator', image: '' },
+  { name: 'Dhirendra Singh Dhami', position: 'Event Coordinator', image: '' },
+  { name: 'Bandana Kharel', position: 'PR & Marketing Coordinator', image: '' },
+  { name: 'Kabir Jung Tharu', position: 'Training Coordinator', image: '' },
+  { name: 'Aayush Basnet', position: 'Research & Development Coordinator', image: '' },
 ]
 const navigation: Record<Role, { label: string; page: Page; icon: typeof LayoutDashboard }[]> = {
   Admin: [
@@ -259,9 +270,138 @@ function PublicFooter({ onNavigate }: { onNavigate: (page: Page) => void }) {
 }
 function LandingPage({ events, onNavigate, onEvent }: { events: ClubEvent[]; onNavigate: (page: Page) => void; onEvent: (id: string) => void }) {
   const upcoming = events.filter((event) => event.date >= '2026-10-05' && event.status !== 'Cancelled').slice(0, 3)
-  return <div className="landing-page"><section className="landing-hero"><div className="hero-copy"><div className="eyebrow hero-eyebrow"><span className="eyebrow-dot" /> KIST COLLEGE OF MANAGEMENT · SINCE 2011</div><h1>Curious minds.<br /><em>Built together.</em></h1><p>We’re the BIM students building ideas, learning by doing, and making campus a little more connected.</p><div className="hero-actions"><button className="button button-lime" onClick={() => onNavigate('events')}>Explore events <ArrowRight size={16} /></button><button className="button button-outline-light" onClick={() => onNavigate('about')}>Get to know us</button></div><div className="hero-footnote"><span><Users size={15} /> 240+ members</span><span><CalendarDays size={15} /> 18 events this year</span></div></div><div className="hero-visual"><img src={events[0]?.image} alt="Students collaborating at a workshop" /><div className="hero-image-tag"><span className="tag-icon"><Sparkles size={16} /></span><div><b>Make room for ideas.</b><small>Learn together, build together.</small></div><ArrowUpRight size={17} /></div><div className="hero-photo-caption">A COMMUNITY FOR WHAT’S NEXT <span>01 / 03</span></div></div><div className="hero-index">01 <span>—</span> 03</div></section><section className="landing-marquee"><span>LEARN BY MAKING</span><i /><span>FIND YOUR PEOPLE</span><i /><span>BUILD WHAT MATTERS</span><i /><span>LEARN BY MAKING</span></section><section className="public-section"><div className="section-heading"><div><div className="eyebrow">ON THE CALENDAR</div><h2>Come be part of it.</h2></div><button className="text-link" onClick={() => onNavigate('events')}>All events <ArrowRight size={15} /></button></div><div className="public-event-grid">{upcoming.map((event, index) => <PublicEventCard key={event.id} event={event} index={index} onClick={() => onEvent(event.id)} />)}</div></section><section className="join-band"><div><span className="eyebrow">THE BIM CLUB AT KIST</span><h2>Good things happen<br />when we make them.</h2><p>Find your next project, your next collaborator, or just a reason to stay curious.</p></div><button className="button button-dark" onClick={() => onNavigate('register')}>Find your people <ArrowRight size={15} /></button></section><PublicFooter onNavigate={onNavigate} /></div>
+  return <div className="landing-page">
+    <section className="landing-hero"><div className="hero-copy"><div className="eyebrow hero-eyebrow"><span className="eyebrow-dot" /> KIST COLLEGE OF MANAGEMENT · SINCE 2011</div><h1>Curious minds.<br /><em>Built together.</em></h1><p>We’re the BIM students building ideas, learning by doing, and making campus a little more connected.</p><div className="hero-actions"><button className="button button-lime" onClick={() => onNavigate('events')}>Explore events <ArrowRight size={16} /></button><button className="button button-outline-light" onClick={() => onNavigate('about')}>Get to know us</button></div><div className="hero-footnote"><span><Users size={15} /> 240+ members</span><span><CalendarDays size={15} /> 18 events this year</span></div></div><div className="hero-visual"><img src={events[0]?.image} alt="Students collaborating at a workshop" /><div className="hero-image-tag"><span className="tag-icon"><Sparkles size={16} /></span><div><b>Make room for ideas.</b><small>Learn together, build together.</small></div><ArrowUpRight size={17} /></div><div className="hero-photo-caption">A COMMUNITY FOR WHAT’S NEXT <span>01 / 03</span></div></div><div className="hero-index">01 <span>—</span> 03</div></section>
+    <section className="landing-marquee"><span>LEARN BY MAKING</span><i /><span>FIND YOUR PEOPLE</span><i /><span>BUILD WHAT MATTERS</span><i /><span>LEARN BY MAKING</span></section>
+    <section className="public-section"><div className="section-heading"><div><div className="eyebrow">ON THE CALENDAR</div><h2>Come be part of it.</h2></div><button className="text-link" onClick={() => onNavigate('events')}>All events <ArrowRight size={15} /></button></div><div className="public-event-grid">{upcoming.map((event, index) => <PublicEventCard key={event.id} event={event} index={index} onClick={() => onEvent(event.id)} />)}</div></section>
+    <BodCarousel />
+    <section className="join-band"><div><span className="eyebrow">THE BIM CLUB AT KIST</span><h2>Good things happen<br />when we make them.</h2><p>Find your next project, your next collaborator, or just a reason to stay curious.</p></div><button className="button button-dark" onClick={() => onNavigate('register')}>Find your people <ArrowRight size={15} /></button></section>
+    <PublicFooter onNavigate={onNavigate} />
+  </div>
 }
 function PublicEventCard({ event, index, onClick }: { event: ClubEvent; index: number; onClick: () => void }) { return <button className="public-event-card" onClick={onClick}><div className="public-event-image"><img src={event.image} alt="" /><span className="category-pill">{event.category}</span><span className="event-number">0{index + 1}</span></div><div className="public-event-info"><div className="event-date-line"><CalendarDays size={14} /> {formatDate(event.date, { month: 'long', day: 'numeric' })} <span>·</span> {event.startTime}</div><h3>{event.title}</h3><div className="public-event-location"><MapPin size={13} />{event.location}</div></div></button> }
+function BodCarousel() {
+  const [visibleCards, setVisibleCards] = useState(() => window.innerWidth <= 700 ? 1 : window.innerWidth <= 1000 ? 2 : 3)
+  const [activeGroup, setActiveGroup] = useState(0)
+  const [trackPosition, setTrackPosition] = useState(1)
+  const [transitioning, setTransitioning] = useState(true)
+  const [hovered, setHovered] = useState(false)
+  const [paused, setPaused] = useState(false)
+  const visibleCardsRef = useRef(visibleCards)
+  const resumeTimeout = useRef<number | undefined>(undefined)
+  const dragStart = useRef<number | null>(null)
+  const groups = useMemo(() => {
+    const result: typeof bodMembers[] = []
+    for (let index = 0; index < bodMembers.length; index += visibleCards) {
+      result.push(bodMembers.slice(index, index + visibleCards))
+    }
+    return result
+  }, [visibleCards])
+
+  useEffect(() => {
+    const updateVisibleCards = () => {
+      const nextVisibleCards = window.innerWidth <= 700 ? 1 : window.innerWidth <= 1000 ? 2 : 3
+      if (nextVisibleCards === visibleCardsRef.current) return
+      visibleCardsRef.current = nextVisibleCards
+      setVisibleCards(nextVisibleCards)
+      setActiveGroup(0)
+      setTrackPosition(1)
+      setTransitioning(false)
+      window.requestAnimationFrame(() => setTransitioning(true))
+    }
+    window.addEventListener('resize', updateVisibleCards)
+    return () => window.removeEventListener('resize', updateVisibleCards)
+  }, [])
+
+  useEffect(() => () => {
+    if (resumeTimeout.current !== undefined) window.clearTimeout(resumeTimeout.current)
+  }, [])
+
+  useEffect(() => {
+    if (hovered || paused || groups.length < 2) return
+    const interval = window.setInterval(() => {
+      setTransitioning(true)
+      setTrackPosition((position) => position + 1)
+      setActiveGroup((group) => (group + 1) % groups.length)
+    }, 4500)
+    return () => window.clearInterval(interval)
+  }, [groups.length, hovered, paused])
+
+  const pauseAutoplay = () => {
+    setPaused(true)
+    if (resumeTimeout.current !== undefined) window.clearTimeout(resumeTimeout.current)
+    resumeTimeout.current = window.setTimeout(() => setPaused(false), 8000)
+  }
+  const moveCarousel = (direction: number) => {
+    pauseAutoplay()
+    setTransitioning(true)
+    if (direction > 0) {
+      setTrackPosition((position) => position + 1)
+      setActiveGroup((group) => (group + 1) % groups.length)
+    } else {
+      setTrackPosition((position) => position - 1)
+      setActiveGroup((group) => (group - 1 + groups.length) % groups.length)
+    }
+  }
+  const goToGroup = (group: number) => {
+    pauseAutoplay()
+    setTransitioning(true)
+    setTrackPosition(group + 1)
+    setActiveGroup(group)
+  }
+  const finishTransition = () => {
+    if (trackPosition === 0) {
+      setTransitioning(false)
+      setTrackPosition(groups.length)
+      setActiveGroup(groups.length - 1)
+    } else if (trackPosition === groups.length + 1) {
+      setTransitioning(false)
+      setTrackPosition(1)
+      setActiveGroup(0)
+    }
+  }
+  const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    dragStart.current = event.clientX
+    event.currentTarget.setPointerCapture(event.pointerId)
+    pauseAutoplay()
+  }
+  const handlePointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (dragStart.current === null) return
+    const distance = event.clientX - dragStart.current
+    dragStart.current = null
+    if (Math.abs(distance) > 45) {
+      setTransitioning(true)
+      if (distance < 0) {
+        setTrackPosition((position) => position + 1)
+        setActiveGroup((group) => (group + 1) % groups.length)
+      } else {
+        setTrackPosition((position) => position - 1)
+        setActiveGroup((group) => (group - 1 + groups.length) % groups.length)
+      }
+    }
+  }
+  const handleTransitionEnd = (event: React.TransitionEvent<HTMLDivElement>) => {
+    if (event.target === event.currentTarget) finishTransition()
+  }
+  const renderGroup = (members: typeof bodMembers, clone = false) => <div className="bod-carousel-group" aria-hidden={clone || undefined} key={`${clone ? 'clone' : 'group'}-${members[0]?.name}`}>
+    {members.map((member) => <article className="bod-card" key={member.name} draggable={false}>
+      {member.image ? <img className="bod-card-photo" src={member.image} alt={member.name} draggable={false} /> : <div className="bod-card-photo bod-card-photo-placeholder" role="img" aria-label={`Photo placeholder for ${member.name}`}><span>{member.name.split(' ').map((part) => part[0]).join('')}</span></div>}
+      <div className="bod-card-copy"><h3>{member.name}</h3><p>{member.position}</p></div>
+    </article>)}
+  </div>
+
+  return <section className="public-section bod-section" aria-label="BIM Club board of directors" onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)} onFocusCapture={pauseAutoplay}>
+    <div className="section-heading bod-heading"><div><div className="eyebrow">MEET THE TEAM</div><h2>Meet Our BOD</h2><p>The people behind BIM Club</p></div><div className="bod-controls"><button className="bod-arrow" onClick={() => moveCarousel(-1)} aria-label="Previous board members"><ChevronLeft size={18} /></button><button className="bod-arrow" onClick={() => moveCarousel(1)} aria-label="Next board members"><ChevronLeft className="bod-next-icon" size={18} /></button></div></div>
+    <div className="bod-carousel-viewport" onPointerDown={handlePointerDown} onPointerUp={handlePointerUp} onPointerCancel={() => { dragStart.current = null }}>
+      <div className={`bod-carousel-track ${transitioning ? 'bod-carousel-transition' : ''}`} style={{ transform: `translateX(-${trackPosition * 100}%)` }} onTransitionEnd={handleTransitionEnd}>
+        {renderGroup(groups[groups.length - 1], true)}
+        {groups.map((group) => renderGroup(group))}
+        {renderGroup(groups[0], true)}
+      </div>
+    </div>
+    <div className="bod-dots" role="group" aria-label="Choose board member group">{groups.map((group, index) => <button key={group[0].name} className={`bod-dot ${activeGroup === index ? 'bod-dot-active' : ''}`} aria-label={`Show board member group ${index + 1}`} aria-current={activeGroup === index ? 'true' : undefined} onClick={() => goToGroup(index)} />)}</div>
+  </section>
+}
 function PublicBackHome({ onNavigate }: { onNavigate: (page: Page) => void }) { return <button className="button button-quiet public-back-home" onClick={() => onNavigate('home')}><ChevronLeft size={15} /> Back to home</button> }
 function AboutPage({ events, members, registrations, onNavigate }: { events: ClubEvent[]; members: Member[]; registrations: Registration[]; onNavigate: (page: Page) => void }) {
   const [activeFeature, setActiveFeature] = useState<string | null>(null)
