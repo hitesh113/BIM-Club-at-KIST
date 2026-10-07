@@ -5,7 +5,7 @@ import {
   Filter, Heart, LayoutDashboard, LogOut, MapPin, Menu, Plus, QrCode, Search,
   Settings2, ShieldCheck, Sparkles, TrendingUp, Users, Wallet, X, Upload,
   CircleDollarSign, GraduationCap, ChartNoAxesCombined, ClipboardList, Building2,
-  ScanLine,
+  ScanLine, BookOpen, Handshake, UserPlus,
 } from 'lucide-react'
 import {
   Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis,
@@ -182,7 +182,7 @@ function App() {
 
   function renderContent() {
     if (!role) {
-      if (page === 'about') return <AboutPage onNavigate={navigate} />
+      if (page === 'about') return <AboutPage events={events} members={members} registrations={registrations} onNavigate={navigate} />
       if (page === 'events') return <EventsPage events={filteredEvents} search={search} setSearch={setSearch} category={category} setCategory={setCategory} statusFilter={statusFilter} setStatusFilter={setStatusFilter} onEvent={openEvent} onNavigate={navigate} />
       if (page === 'event-detail') return <EventDetails event={selectedEvent} registrations={registrations} onBack={() => navigate('events')} onRegister={() => navigate('login')} />
       if (page === 'login' || page === 'register') return <AuthPage mode={page} roleChoice={roleChoice} setRoleChoice={setRoleChoice} onSignIn={signIn} onNavigate={navigate} />
@@ -204,7 +204,7 @@ function App() {
     if (page === 'notifications') return <NotificationsPage notifications={notifications.filter((item) => item.recipient === 'All' || item.recipient === role)} onRead={markNotificationsRead} />
     if (page === 'activity') return <ActivityLogPage entries={activityLog} />
     if (page === 'profile') return <ProfilePage member={currentMember} role={role} onRole={signIn} onSignOut={signOut} />
-    if (page === 'about') return <AboutPage onNavigate={navigate} />
+    if (page === 'about') return <AboutPage events={events} members={members} registrations={registrations} onNavigate={navigate} />
     return <LandingPage events={events} onNavigate={navigate} onEvent={openEvent} />
   }
 }
@@ -226,7 +226,84 @@ function LandingPage({ events, onNavigate, onEvent }: { events: ClubEvent[]; onN
 }
 function PublicEventCard({ event, index, onClick }: { event: ClubEvent; index: number; onClick: () => void }) { return <button className="public-event-card" onClick={onClick}><div className="public-event-image"><img src={event.image} alt="" /><span className="category-pill">{event.category}</span><span className="event-number">0{index + 1}</span></div><div className="public-event-info"><div className="event-date-line"><CalendarDays size={14} /> {formatDate(event.date, { month: 'long', day: 'numeric' })} <span>·</span> {event.startTime}</div><h3>{event.title}</h3><div className="public-event-location"><MapPin size={13} />{event.location}</div></div></button> }
 function PublicBackHome({ onNavigate }: { onNavigate: (page: Page) => void }) { return <button className="button button-quiet public-back-home" onClick={() => onNavigate('home')}><ChevronLeft size={15} /> Back to home</button> }
-function AboutPage({ onNavigate }: { onNavigate: (page: Page) => void }) { return <div className="about-page"><section className="about-hero"><div className="public-page-action"><PublicBackHome onNavigate={onNavigate} /></div><div className="eyebrow">WHO WE ARE</div><h1>Information Management,<br /><em>with a human side.</em></h1><p>The BIM Club brings curious students together to explore technology, business, and the ideas between them.</p><img src="https://images.unsplash.com/photo-1528605248644-14dd04022da1?auto=format&fit=crop&w=1800&q=85" alt="Students talking around a table" /></section><section className="about-content"><div><div className="eyebrow">OUR APPROACH</div><h2>Less watching.<br />More making.</h2></div><div><p>We’re a student-led community at KIST College of Management. Through workshops, talks, and collaborative projects, we make practical learning part of campus life.</p><p>Whether you’re sketching your first interface or bringing a team idea to life, there’s space to learn at your own pace and contribute in your own way.</p><button className="button button-primary" onClick={() => onNavigate('events')}>See what’s coming up <ArrowRight size={15} /></button></div></section><div className="about-facts"><div><b>240+</b><span>club members</span></div><div><b>18</b><span>events this year</span></div><div><b>2011</b><span>founded at KIST</span></div><div><b>One</b><span>curious community</span></div></div><PublicFooter onNavigate={onNavigate} /></div> }
+function AboutPage({ events, members, registrations, onNavigate }: { events: ClubEvent[]; members: Member[]; registrations: Registration[]; onNavigate: (page: Page) => void }) {
+  const [activeFeature, setActiveFeature] = useState<string | null>(null)
+  const [activeStep, setActiveStep] = useState(0)
+  const completedEvents = events.filter((event) => event.status === 'Completed').length
+  const activeParticipants = new Set(registrations.filter((registration) => registration.status !== 'Cancelled').map((registration) => registration.memberId)).size
+  const features = [
+    { title: 'Events & Activities', description: 'Explore gatherings, events, and hands-on activities from the club calendar.', icon: CalendarDays },
+    { title: 'Student Community', description: 'Meet fellow BIM students and find people to learn and create alongside.', icon: Users },
+    { title: 'Learning & Workshops', description: 'Build practical skills through workshops, talks, and shared learning.', icon: BookOpen },
+    { title: 'Collaboration', description: 'Bring ideas together, contribute your perspective, and make things as a team.', icon: Handshake },
+  ]
+  const steps = [
+    { title: 'Join', description: 'Create a club profile to get connected with the BIM Club community and its activities.', icon: UserPlus },
+    { title: 'Participate', description: 'Browse the Events page and take part in activities that match your interests.', icon: CalendarDays },
+    { title: 'Contribute', description: 'Share your ideas, skills, and energy to help make club activities better for everyone.', icon: Heart },
+  ]
+  const stats = [
+    { label: 'Total Members', value: members.length, icon: Users },
+    { label: 'Total Events', value: events.length, icon: CalendarDays },
+    { label: 'Completed Events', value: completedEvents, icon: CheckCircle2 },
+    { label: 'Active Participants', value: activeParticipants, icon: Activity },
+  ]
+  const ActiveStepIcon = steps[activeStep].icon
+
+  return <div className="about-page">
+    <section className="about-modern-hero">
+      <div className="about-modern-hero-inner">
+        <div className="about-modern-copy">
+          <div className="public-page-action"><PublicBackHome onNavigate={onNavigate} /></div>
+          <div className="eyebrow hero-eyebrow"><span className="eyebrow-dot" /> KIST COLLEGE OF MANAGEMENT</div>
+          <h1>About BIM Club</h1>
+          <h2>BIM Club, KIST College of Management</h2>
+          <p>A student community for exploring technology, business, and new ideas through events, practical learning, and collaboration.</p>
+          <div className="hero-actions">
+            <button className="button button-lime" onClick={() => onNavigate('events')}>Explore Events <ArrowRight size={16} /></button>
+            <button className="button button-outline-light" onClick={() => onNavigate('register')}>Join the Club</button>
+          </div>
+        </div>
+        <div className="about-modern-image">
+          <img src="https://images.unsplash.com/photo-1528605248644-14dd04022da1?auto=format&fit=crop&w=1200&q=85" alt="Students talking and sharing ideas around a table" />
+          <div className="about-image-caption"><span className="about-image-icon"><GraduationCap size={17} /></span><span><b>Learn together.</b><small>Find your next way to take part.</small></span></div>
+        </div>
+      </div>
+    </section>
+
+    <section className="about-modern-section about-features">
+      <div className="about-section-heading"><div><div className="eyebrow">WHAT YOU’LL FIND HERE</div><h2>Make space for what interests you.</h2></div><p>Explore different ways to connect, learn, and get involved.</p></div>
+      <div className="about-feature-grid">{features.map(({ title, description, icon: Icon }) => {
+        const expanded = activeFeature === title
+        return <button key={title} className={`about-feature-card ${expanded ? 'about-feature-open' : ''}`} aria-expanded={expanded} onClick={() => setActiveFeature(expanded ? null : title)}>
+          <span className="about-feature-icon"><Icon size={20} /></span><span className="about-feature-title">{title}</span><span className="about-feature-description">{expanded ? description : 'Discover more'} <ArrowRight size={14} /></span>
+        </button>
+      })}</div>
+    </section>
+
+    <section className="about-engage-section">
+      <div className="about-modern-section about-engage-layout">
+        <div className="about-engage-heading"><div className="eyebrow">GET INVOLVED</div><h2>How We Engage</h2><p>There’s more than one way to be part of the club. Start where you are, and take the next step when you’re ready.</p></div>
+        <div className="about-engage-interaction">
+          <div className="about-step-list" role="group" aria-label="How we engage">
+            {steps.map(({ title, icon: Icon }, index) => <button key={title} className={`about-step ${activeStep === index ? 'about-step-active' : ''}`} aria-pressed={activeStep === index} aria-controls="about-step-detail" onClick={() => setActiveStep(index)}>
+              <span className="about-step-icon"><Icon size={18} /></span><span className="about-step-title">{title}</span><span className="about-step-number">0{index + 1}</span>
+            </button>)}
+          </div>
+          <div className="about-step-detail" id="about-step-detail" role="status"><span className="about-detail-icon"><ActiveStepIcon size={20} /></span><div><span className="eyebrow">STEP 0{activeStep + 1}</span><h3>{steps[activeStep].title}</h3><p>{steps[activeStep].description}</p></div></div>
+        </div>
+      </div>
+    </section>
+
+    <section className="about-modern-section about-stats-section">
+      <div className="about-section-heading"><div><div className="eyebrow">THE CLUB AT A GLANCE</div><h2>Built around participation.</h2></div><p>Current figures from the club’s available records.</p></div>
+      <div className="about-stat-grid">{stats.map(({ label, value, icon: Icon }) => <div className="about-stat-card" key={label}><span className="about-stat-icon"><Icon size={18} /></span><b>{value.toLocaleString()}</b><span>{label}</span></div>)}</div>
+    </section>
+
+    <section className="about-final-cta"><div><div className="eyebrow hero-eyebrow">FIND YOUR NEXT STEP</div><h2>Explore BIM Club Events</h2><p>See what’s on the calendar and find an activity to join.</p></div><button className="button button-lime" onClick={() => onNavigate('events')}>Explore Events <ArrowRight size={16} /></button></section>
+    <PublicFooter onNavigate={onNavigate} />
+  </div>
+}
 function EventsPage({ events, search, setSearch, category, setCategory, statusFilter, setStatusFilter, onEvent, onNavigate }: { events: ClubEvent[]; search: string; setSearch: (value: string) => void; category: string; setCategory: (value: string) => void; statusFilter: string; setStatusFilter: (value: string) => void; onEvent: (id: string) => void; onNavigate: (page: Page) => void }) {
   return <div className="events-page"><div className="events-intro"><div className="public-page-action"><PublicBackHome onNavigate={onNavigate} /></div><div className="eyebrow">MAKE SOMETHING OF YOUR SEMESTER</div><h1>Events that take<br /><em>you somewhere.</em></h1><p>Workshops, conversations, and the occasional friendly competition. There’s a seat for you.</p></div><div className="filter-bar"><label className="search-field"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search events" /></label><label className="select-field"><Filter size={15} /><select value={category} onChange={(event) => setCategory(event.target.value)}><option>All categories</option><option>Workshop</option><option>Design</option><option>Competition</option><option>Seminar</option><option>Community</option></select><ChevronDown size={14} /></label><label className="select-field"><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option>All statuses</option><option>Registration Open</option><option>Published</option><option>Completed</option></select><ChevronDown size={14} /></label><span className="result-count">{events.length} events</span></div><div className="public-event-grid events-grid-list">{events.map((event, index) => <PublicEventCard key={event.id} event={event} index={index} onClick={() => onEvent(event.id)} />)}</div>{events.length === 0 && <EmptyState title="No events match those filters" detail="Try changing your search or category." />}</div>
 }
