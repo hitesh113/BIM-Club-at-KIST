@@ -167,3 +167,22 @@ button:disabled{cursor:not-allowed}
 @media(max-width:900px){.about-modern-hero-inner{gap:4vw}.about-modern-image>img{height:300px}.about-feature-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.about-engage-layout{grid-template-columns:1fr;gap:25px}.about-engage-heading>p{max-width:530px}}
 @media(max-width:700px){.about-modern-hero{padding:32px 20px 36px}.about-modern-copy .public-page-action{margin-bottom:24px}.about-modern-copy h1{font-size:43px}.about-modern-copy h2{font-size:17px}.about-modern-copy>p{font-size:12px}.about-modern-copy .hero-actions{flex-wrap:wrap;margin-top:20px}.about-modern-image{margin-top:6px;padding-left:12px}.about-modern-image>img{height:225px}.about-image-caption{right:-2px;min-width:215px;padding:10px 12px}.about-modern-section{padding:43px 20px}.about-section-heading{align-items:flex-start;flex-direction:column;gap:9px;margin-bottom:18px}.about-section-heading h2,.about-engage-heading h2{font-size:25px}.about-section-heading>p{font-size:10px}.about-feature-grid{grid-template-columns:1fr 1fr;gap:9px}.about-feature-card{min-height:160px;padding:13px}.about-feature-title{margin-top:14px;font-size:11px}.about-feature-description{font-size:9px}.about-engage-layout{gap:19px}.about-engage-interaction{padding:10px}.about-step-list{gap:5px}.about-step{min-height:61px;padding:7px 5px;gap:5px;flex-wrap:wrap}.about-step-icon{width:25px;height:25px}.about-step-icon svg{width:15px}.about-step-title{font-size:9px}.about-step-number{font-size:8px}.about-step-detail{min-height:125px;padding:14px 12px;gap:10px}.about-step-detail p{font-size:9px}.about-stat-grid{grid-template-columns:1fr 1fr;gap:9px}.about-stat-card{min-height:112px;padding:12px;grid-template-columns:31px 1fr;column-gap:8px}.about-stat-icon{width:31px;height:31px}.about-stat-icon svg{width:16px}.about-stat-card b{font-size:21px}.about-stat-card>span:last-child{font-size:9px}.about-final-cta{padding:30px 20px;align-items:flex-start;flex-direction:column;gap:16px}.about-final-cta h2{font-size:24px}.about-final-cta p{font-size:10px}}
 @media(prefers-reduced-motion:reduce){.about-feature-card,.about-feature-description svg,.about-step{transition:none}}
+
+.public-footer{min-height:0;padding:43px max(7vw,40px) 0;display:block;border-top:1px solid #ebefeb;background:#fbfcf9}
+.footer-main{max-width:1240px;margin:0 auto;padding:0 0 34px;display:grid;grid-template-columns:1.35fr .8fr .9fr 1.1fr;gap:48px}
+.footer-section-title{margin-bottom:16px;color:#708076;font-size:9px;font-weight:700;letter-spacing:.09em}
+.footer-club .footer-brand{gap:11px}
+.footer-club .footer-brand b{font:800 16px/1 var(--display);color:var(--forest)}
+.footer-club .footer-brand small{color:#89938b;font-size:9px}
+.footer-club>p{max-width:270px;margin-top:14px;color:#768278;font-size:10px;line-height:1.8}
+.footer-column{display:flex;flex-direction:column;align-items:flex-start;gap:11px}
+.footer-column button,.footer-column>a,.footer-column>span{padding:0;border:0;background:none;color:#66736a;font-size:10px;line-height:1.55;text-align:left;text-decoration:none;transition:color .16s ease,transform .16s ease}
+.footer-column button,.footer-column>a{cursor:pointer}
+.footer-column button:hover,.footer-column>a:hover{color:var(--forest);transform:translateX(2px)}
+.footer-column button:focus-visible,.footer-column>a:focus-visible{outline:2px solid #5ca17a;outline-offset:3px}
+.footer-column .footer-social-link,.footer-column .footer-website-link{display:inline-flex;align-items:center;gap:9px}
+.footer-social-link>svg:first-child,.footer-website-link>svg:first-child{color:#568267}
+.footer-social-link>svg:last-child,.footer-website-link>svg:last-child{margin-left:auto;color:#9aa69b}
+.footer-bottom{max-width:1240px;min-height:53px;margin:0 auto;padding:15px 0;display:flex;align-items:center;border-top:1px solid #e5eae5;color:#89938b;font-size:9px}
+@media(max-width:900px){.footer-main{grid-template-columns:repeat(2,minmax(0,1fr));gap:32px 42px}}
+@media(max-width:700px){.public-footer{padding:32px 20px 0}.footer-main{padding-bottom:26px;grid-template-columns:1fr;gap:25px}.footer-section-title{margin-bottom:12px}.footer-club>p{max-width:350px}.footer-bottom{min-height:55px;font-size:8px;line-height:1.6}}

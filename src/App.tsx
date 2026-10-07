@@ -5,7 +5,7 @@ import {
   Filter, Heart, LayoutDashboard, LogOut, MapPin, Menu, Plus, QrCode, Search,
   Settings2, ShieldCheck, Sparkles, TrendingUp, Users, Wallet, X, Upload,
   CircleDollarSign, GraduationCap, ChartNoAxesCombined, ClipboardList, Building2,
-  ScanLine, BookOpen, Handshake, UserPlus,
+  ScanLine, BookOpen, Handshake, UserPlus, Globe,
 } from 'lucide-react'
 import {
   Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis,
@@ -219,7 +219,44 @@ function PageHeading({ page, role, onCreate, onNavigate }: { page: Page; role: R
   const descriptions: Partial<Record<Page, string>> = { dashboard: role === 'Admin' ? 'A clear view of what’s happening across your club.' : role === 'BOD' ? 'Your team’s events, people, and activity at a glance.' : 'Your place to keep up with the BIM Club community.', 'manage-events': 'Plan, publish, and track every club event.', registrations: 'Keep track of everyone joining your events.', attendance: 'Check in members and keep attendance up to date.', files: 'Resources and documents shared by the club.', donations: 'A transparent record of community support.', users: 'The people who make the club what it is.', reports: 'A snapshot of club participation and activity.', leaderboard: 'Celebrating the members who show up.', profile: 'Your account and membership details.' }
   return <div className="page-heading"><div><div className="eyebrow">{role} workspace <span>/</span> KIST BIM Club</div><h1>{pageTitles[page]}</h1><p>{descriptions[page]}</p></div>{(page === 'manage-events' || page === 'dashboard' && role !== 'Participant') && <button className="button button-primary" onClick={onCreate}><Plus size={16} /> Create event</button>}{page === 'events' && <button className="button button-quiet" onClick={() => onNavigate('dashboard')}><LayoutDashboard size={16} /> Dashboard</button>}</div>
 }
-function PublicFooter({ onNavigate }: { onNavigate: (page: Page) => void }) { return <footer className="public-footer"><div className="footer-brand"><span className="brand-mark"><GraduationCap size={20} /></span><div><b>BIM Club</b><small>KIST College of Management · Kathmandu, Nepal</small></div></div><div className="footer-links"><button onClick={() => onNavigate('about')}>About</button><button onClick={() => onNavigate('events')}>Events</button><button onClick={() => onNavigate('login')}>Member sign in</button></div><span className="footer-copyright">© 2026 BIM Club at KIST</span></footer> }
+function SocialBrandIcon({ brand }: { brand: 'linkedin' | 'instagram' | 'facebook' }) {
+  if (brand === 'linkedin') return <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M5.2 3.8a2.1 2.1 0 1 0 0 4.2 2.1 2.1 0 0 0 0-4.2ZM3.5 9.5h3.4v11H3.5v-11Zm5.5 0h3.3V11h.1a3.6 3.6 0 0 1 3.2-1.8c3.5 0 4.2 2.3 4.2 5.2v6.1h-3.4v-5.4c0-1.3 0-3-1.8-3s-2.1 1.4-2.1 2.9v5.5H9v-11Z" /></svg>
+  if (brand === 'instagram') return <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="3" y="3" width="18" height="18" rx="5" /><circle cx="12" cy="12" r="4" /><circle cx="17.5" cy="6.7" r="1" fill="currentColor" stroke="none" /></svg>
+  return <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M13.4 21v-8.2h2.8l.4-3.2h-3.2V7.5c0-.9.3-1.5 1.6-1.5h1.7V3.1c-.3 0-1.3-.1-2.5-.1-2.5 0-4.2 1.5-4.2 4.3v2.3H7.2v3.2H10V21h3.4Z" /></svg>
+}
+
+function PublicFooter({ onNavigate }: { onNavigate: (page: Page) => void }) {
+  return <footer className="public-footer">
+    <div className="footer-main">
+      <section className="footer-club">
+        <div className="footer-section-title">BIM CLUB</div>
+        <div className="footer-brand"><span className="brand-mark"><GraduationCap size={20} /></span><div><b>BIM Club</b><small>KIST College of Management</small></div></div>
+        <p>A platform for managing BIM Club events, activities, members, and community engagement.</p>
+      </section>
+      <nav className="footer-column" aria-label="Quick links">
+        <div className="footer-section-title">QUICK LINKS</div>
+        <button onClick={() => onNavigate('home')}>Home</button>
+        <button onClick={() => onNavigate('about')}>About BIM Club</button>
+        <button onClick={() => onNavigate('events')}>Events</button>
+        <a href="#footer-connect">Contact</a>
+        <button onClick={() => onNavigate('login')}>Login</button>
+      </nav>
+      <section className="footer-column" id="footer-connect">
+        <div className="footer-section-title">CONNECT WITH US</div>
+        <a className="footer-social-link" href="https://www.linkedin.com/company/bim-club-kist-college/posts/?feedView=all" target="_blank" rel="noopener noreferrer"><SocialBrandIcon brand="linkedin" /> LinkedIn <ArrowUpRight size={13} /></a>
+        <a className="footer-social-link" href="https://www.instagram.com/bimclub_kist?stkn=MWVrYXRqYzUxaDYzaw==" target="_blank" rel="noopener noreferrer"><SocialBrandIcon brand="instagram" /> Instagram <ArrowUpRight size={13} /></a>
+        <a className="footer-social-link" href="https://www.facebook.com/share/1EgQnBmaLf/" target="_blank" rel="noopener noreferrer"><SocialBrandIcon brand="facebook" /> Facebook <ArrowUpRight size={13} /></a>
+      </section>
+      <section className="footer-column footer-college">
+        <div className="footer-section-title">KIST COLLEGE OF MANAGEMENT</div>
+        <span>KIST College of Management</span>
+        <span>Kamalpokhari, Kathmandu</span>
+        <a className="footer-website-link" href="https://kist.edu.np/" target="_blank" rel="noopener noreferrer"><Globe size={15} /> Official Website <ArrowUpRight size={13} /></a>
+      </section>
+    </div>
+    <div className="footer-bottom"><span>© 2026 BIM Club, KIST College of Management. All rights reserved.</span></div>
+  </footer>
+}
 function LandingPage({ events, onNavigate, onEvent }: { events: ClubEvent[]; onNavigate: (page: Page) => void; onEvent: (id: string) => void }) {
   const upcoming = events.filter((event) => event.date >= '2026-10-05' && event.status !== 'Cancelled').slice(0, 3)
   return <div className="landing-page"><section className="landing-hero"><div className="hero-copy"><div className="eyebrow hero-eyebrow"><span className="eyebrow-dot" /> KIST COLLEGE OF MANAGEMENT · SINCE 2011</div><h1>Curious minds.<br /><em>Built together.</em></h1><p>We’re the BIM students building ideas, learning by doing, and making campus a little more connected.</p><div className="hero-actions"><button className="button button-lime" onClick={() => onNavigate('events')}>Explore events <ArrowRight size={16} /></button><button className="button button-outline-light" onClick={() => onNavigate('about')}>Get to know us</button></div><div className="hero-footnote"><span><Users size={15} /> 240+ members</span><span><CalendarDays size={15} /> 18 events this year</span></div></div><div className="hero-visual"><img src={events[0]?.image} alt="Students collaborating at a workshop" /><div className="hero-image-tag"><span className="tag-icon"><Sparkles size={16} /></span><div><b>Make room for ideas.</b><small>Learn together, build together.</small></div><ArrowUpRight size={17} /></div><div className="hero-photo-caption">A COMMUNITY FOR WHAT’S NEXT <span>01 / 03</span></div></div><div className="hero-index">01 <span>—</span> 03</div></section><section className="landing-marquee"><span>LEARN BY MAKING</span><i /><span>FIND YOUR PEOPLE</span><i /><span>BUILD WHAT MATTERS</span><i /><span>LEARN BY MAKING</span></section><section className="public-section"><div className="section-heading"><div><div className="eyebrow">ON THE CALENDAR</div><h2>Come be part of it.</h2></div><button className="text-link" onClick={() => onNavigate('events')}>All events <ArrowRight size={15} /></button></div><div className="public-event-grid">{upcoming.map((event, index) => <PublicEventCard key={event.id} event={event} index={index} onClick={() => onEvent(event.id)} />)}</div></section><section className="join-band"><div><span className="eyebrow">THE BIM CLUB AT KIST</span><h2>Good things happen<br />when we make them.</h2><p>Find your next project, your next collaborator, or just a reason to stay curious.</p></div><button className="button button-dark" onClick={() => onNavigate('register')}>Find your people <ArrowRight size={15} /></button></section><PublicFooter onNavigate={onNavigate} /></div>
