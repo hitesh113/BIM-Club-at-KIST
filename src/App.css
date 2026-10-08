@@ -415,3 +415,29 @@ button:disabled{cursor:not-allowed}
 .landing-page .footer-social-link>svg:first-child,.landing-page .footer-website-link>svg:first-child{color:var(--bim-gold)}
 .landing-page .footer-social-link>svg:last-child,.landing-page .footer-website-link>svg:last-child{color:#aab9c9}
 .landing-page .footer-bottom{border-color:#ffffff2e;color:#bac8d6}
+
+.landing-page .landing-hero.home-hero{min-height:0;padding:57px max(5vw,30px) 52px;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:42px;background:var(--bim-navy)}
+.home-hero-copy{position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;text-align:center;animation:home-hero-enter .55s ease-out both}
+.home-hero-badge{display:inline-flex;align-items:center;gap:8px;color:#dce5ee;font-size:10px;font-weight:700;letter-spacing:.13em}
+.home-hero-badge>span{width:7px;height:7px;border-radius:50%;background:var(--bim-orange)}
+.home-hero-badge i{color:var(--bim-gold);font-style:normal}
+.home-hero-copy h1{margin:20px 0 11px;color:#fff;font:800 clamp(42px,5.5vw,68px)/1.08 var(--display);letter-spacing:-.045em}
+.home-hero-copy h1 em{color:var(--bim-gold);font-style:normal}
+.home-hero-copy>p{color:#d5dfeb;font-size:12px;letter-spacing:.07em}
+.home-hero-copy>p span{padding:0 6px;color:var(--bim-orange)}
+.home-hero-copy>.button{margin-top:23px;min-height:42px;padding:0 19px}
+.home-hero-gallery{width:min(100%,1120px);min-height:224px;padding:14px 4px 10px;display:flex;align-items:center;justify-content:center;gap:13px;perspective:1000px}
+.home-hero-card{min-width:0;flex:1;padding:8px 8px 0;overflow:hidden;border:1px solid #ffffffba;border-radius:5px;background:#fff;box-shadow:0 5px 15px #06192c26;animation:home-card-enter .55s cubic-bezier(.2,.7,.25,1) both;transition:transform .2s ease,box-shadow .2s ease}
+.home-hero-card:nth-child(1){animation-delay:.08s;transform:rotate(-2.2deg) translateY(5px)}
+.home-hero-card:nth-child(2){animation-delay:.15s;transform:rotate(1.2deg) translateY(-5px)}
+.home-hero-card:nth-child(3){animation-delay:.22s;transform:rotate(-.6deg) translateY(1px)}
+.home-hero-card:nth-child(4){animation-delay:.29s;transform:rotate(1.8deg) translateY(-4px)}
+.home-hero-card:nth-child(5){animation-delay:.36s;transform:rotate(-1.4deg) translateY(5px)}
+.home-hero-card:hover{z-index:2;transform:translateY(-7px) rotate(0);box-shadow:0 11px 24px #06192c38}
+.home-hero-card img{width:100%;height:164px;border-radius:2px;object-fit:cover;background:#dfe6ed;filter:saturate(.86)}
+.home-hero-card h2{margin:0;padding:10px 3px 11px;color:var(--bim-navy);font:700 12px/1.2 var(--display);text-align:left}
+@keyframes home-hero-enter{from{opacity:0;transform:translateY(9px)}to{opacity:1;transform:translateY(0)}}
+@keyframes home-card-enter{from{opacity:0;translate:0 12px}to{opacity:1;translate:0 0}}
+@media(max-width:900px){.landing-page .landing-hero.home-hero{gap:34px;padding-right:32px;padding-left:32px}.home-hero-gallery{gap:10px}.home-hero-card{padding:6px 6px 0}.home-hero-card img{height:146px}.home-hero-card h2{font-size:11px}}
+@media(max-width:700px){.landing-page .landing-hero.home-hero{min-height:0;padding:43px 0 28px;display:flex;gap:30px}.home-hero-copy{padding:0 20px}.home-hero-badge{font-size:9px}.home-hero-copy h1{margin:18px 0 10px;font-size:clamp(37px,10vw,48px);letter-spacing:-.04em}.home-hero-copy>p{font-size:10px;letter-spacing:.025em}.home-hero-copy>p span{padding:0 3px}.home-hero-copy>.button{margin-top:19px}.home-hero-gallery{width:100%;min-height:0;padding:14px 22px 17px;justify-content:flex-start;gap:13px;overflow-x:auto;overflow-y:hidden;scroll-snap-type:x mandatory;scrollbar-width:thin;scrollbar-color:#7890a9 transparent;-webkit-overflow-scrolling:touch}.home-hero-card{flex:0 0 min(68vw,245px);padding:7px 7px 0;scroll-snap-align:center}.home-hero-card:nth-child(n){transform:none}.home-hero-card:hover{transform:translateY(-4px)}.home-hero-card img{height:162px}.home-hero-card h2{padding:10px 3px 11px;font-size:12px}}
+@media(prefers-reduced-motion:reduce){.home-hero-copy,.home-hero-card{animation:none}.home-hero-card{transition:none}}

@@ -44,6 +44,13 @@ const bodMembers = [
   { name: 'Kabir Jung Tharu', position: 'Training Coordinator', image: '' },
   { name: 'Aayush Basnet', position: 'Research & Development Coordinator', image: '' },
 ]
+const homeHeroCards = [
+  { title: 'Technology', image: 'https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=640&q=85', alt: 'Laptop and technology workspace' },
+  { title: 'Innovation', image: 'https://images.unsplash.com/photo-1558655146-9f40138edfeb?auto=format&fit=crop&w=640&q=85', alt: 'Creative design work in progress' },
+  { title: 'Workshops', image: 'https://images.unsplash.com/photo-1521737711867-e3b97375f902?auto=format&fit=crop&w=640&q=85', alt: 'Students learning together' },
+  { title: 'Events', image: 'https://images.unsplash.com/photo-1504384308090-c894fdcc538d?auto=format&fit=crop&w=640&q=85', alt: 'People collaborating at a technology event' },
+  { title: 'Community', image: 'https://images.unsplash.com/photo-1528605248644-14dd04022da1?auto=format&fit=crop&w=640&q=85', alt: 'Students sharing ideas around a table' },
+]
 const navigation: Record<Role, { label: string; page: Page; icon: typeof LayoutDashboard }[]> = {
   Admin: [
     { label: 'Overview', page: 'dashboard', icon: LayoutDashboard }, { label: 'Events', page: 'manage-events', icon: CalendarDays },
@@ -271,7 +278,20 @@ function PublicFooter({ onNavigate }: { onNavigate: (page: Page) => void }) {
 function LandingPage({ events, onNavigate, onEvent }: { events: ClubEvent[]; onNavigate: (page: Page) => void; onEvent: (id: string) => void }) {
   const upcoming = events.filter((event) => event.date >= '2026-10-05' && event.status !== 'Cancelled').slice(0, 3)
   return <div className="landing-page">
-    <section className="landing-hero"><div className="hero-copy"><div className="eyebrow hero-eyebrow"><span className="eyebrow-dot" /> KIST COLLEGE OF MANAGEMENT · SINCE 2011</div><h1>Curious minds.<br /><em>Built together.</em></h1><p>We’re the BIM students building ideas, learning by doing, and making campus a little more connected.</p><div className="hero-actions"><button className="button button-lime" onClick={() => onNavigate('events')}>Explore events <ArrowRight size={16} /></button><button className="button button-outline-light" onClick={() => onNavigate('about')}>Get to know us</button></div><div className="hero-footnote"><span><Users size={15} /> 240+ members</span><span><CalendarDays size={15} /> 18 events this year</span></div></div><div className="hero-visual"><img src={events[0]?.image} alt="Students collaborating at a workshop" /><div className="hero-image-tag"><span className="tag-icon"><Sparkles size={16} /></span><div><b>Make room for ideas.</b><small>Learn together, build together.</small></div><ArrowUpRight size={17} /></div><div className="hero-photo-caption">A COMMUNITY FOR WHAT’S NEXT <span>01 / 03</span></div></div><div className="hero-index">01 <span>—</span> 03</div></section>
+    <section className="landing-hero home-hero">
+      <div className="home-hero-copy">
+        <div className="home-hero-badge"><span /> BIM CLUB <i>•</i> KIST COLLEGE</div>
+        <h1>Building Ideas.<br /><em>Shaping Tomorrow.</em></h1>
+        <p>Technology <span>·</span> Innovation <span>·</span> Community</p>
+        <button className="button button-lime" onClick={() => onNavigate('events')}>Explore Events <ArrowRight size={16} /></button>
+      </div>
+      <div className="home-hero-gallery" aria-label="BIM Club themes">
+        {homeHeroCards.map((card) => <article className="home-hero-card" key={card.title}>
+          <img src={card.image} alt={card.alt} />
+          <h2>{card.title}</h2>
+        </article>)}
+      </div>
+    </section>
     <section className="landing-marquee"><span>LEARN BY MAKING</span><i /><span>FIND YOUR PEOPLE</span><i /><span>BUILD WHAT MATTERS</span><i /><span>LEARN BY MAKING</span></section>
     <section className="public-section"><div className="section-heading"><div><div className="eyebrow">ON THE CALENDAR</div><h2>Come be part of it.</h2></div><button className="text-link" onClick={() => onNavigate('events')}>All events <ArrowRight size={15} /></button></div><div className="public-event-grid">{upcoming.map((event, index) => <PublicEventCard key={event.id} event={event} index={index} onClick={() => onEvent(event.id)} />)}</div></section>
     <BodCarousel />
