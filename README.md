@@ -22,6 +22,8 @@ VITE_SUPABASE_PUBLISHABLE_KEY=<your-supabase-publishable-key>
 
 For this project, the project reference is `okphwkwdxfvttprjylux`. Keep `.env.local` out of version control; it is ignored by Git. Vite exposes `VITE_` variables in the browser bundle, so use only a Supabase publishable key here, never a service-role key. The current app has no Supabase queries, authentication wiring, or database tables; its existing flows still use mock data.
 
+Run `npm run test:supabase` to check project reachability. The temporary test sends an HTTP request to Supabase Auth's health endpoint and does not read or write database tables. A successful result confirms the endpoint responded; a 401/403 means the project is reachable but rejected the key, a 404 suggests the endpoint or project URL is incorrect, and a network or timeout error means the host could not be reached.
+
 ## Demo roles
 
 Choose **Member sign in** and select a demo role:
