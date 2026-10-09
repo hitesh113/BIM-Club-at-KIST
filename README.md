@@ -59,6 +59,6 @@ A future Supabase adapter can implement that contract and replace the mock repos
 
 ## Initial database migration
 
-The initial `profiles` and `events` schema is in `supabase/migrations/20261009155000_create_profiles_and_events.sql`. To apply it manually, first confirm that the Supabase Dashboard is open for the intended project and review the migration. In **SQL Editor**, create a new query, paste the full migration file, and run it. Then verify that `profiles` and `events` exist and that RLS is enabled for both in **Table Editor**. This migration does not seed mock club records or connect the frontend to the database.
+The initial `profiles` and `events` schema is in `supabase/migrations/001_initial_schema.sql`. To apply it manually, first confirm that the Supabase Dashboard is open for the intended project and review the migration. In **SQL Editor**, create a new query, paste the full migration file, and run it. Then verify that `profiles` and `events` exist and that RLS is enabled for both in **Table Editor**. This migration does not seed mock club records or connect the frontend to the database.
 
 New Auth users receive a linked profile with the `participant` role. Profile role changes are not permitted through the client API; an initial administrator must be assigned through a trusted administrative path, such as a carefully targeted update in the SQL Editor after that user has signed up. Never expose a service-role key in the browser.

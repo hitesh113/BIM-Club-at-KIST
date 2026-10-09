@@ -2,7 +2,8 @@ begin;
 
 create table public.profiles (
   id uuid primary key references auth.users (id) on delete cascade,
-  full_name text not null check (length(btrim(full_name)) > 0),
+  full_name text not null
+    check (length(btrim(full_name)) > 0),
   email text,
   role text not null default 'participant'
     check (role in ('admin', 'bod', 'participant')),
@@ -16,16 +17,12 @@ create unique index profiles_email_lower_unique_idx
 
 create table public.events (
   id uuid primary key default gen_random_uuid(),
-  title text not null check (length(btrim(title)) > 0),
+  title text not null
+    check (length(btrim(title)) > 0),
   description text not null default '',
   event_date date not null,
-  start_time time not null,
-  end_time time not null,
-  location text not null check (length(btrim(location)) > 0),
-  category text not null check (length(btrim(category)) > 0),
-  image_url text,
-  max_participants integer not null check (max_participants > 0),
-  registration_deadline date not null,
+  location text not null
+    check (length(btrim(location)) > 0),
   status text not null default 'Draft'
     check (status in (
       'Draft',
@@ -35,20 +32,14 @@ create table public.events (
       'Completed',
       'Cancelled'
     )),
-  created_by uuid references public.profiles (id) on delete set null,
+  created_by uuid default auth.uid()
+    references public.profiles (id) on delete set null,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now(),
-  constraint events_valid_time_range check (end_time > start_time),
-  constraint events_registration_deadline_before_event
-    check (registration_deadline <= event_date)
+  updated_at timestamptz not null default now()
 );
 
 create index events_status_date_idx
   on public.events (status, event_date);
-
-create index events_created_by_idx
-  on public.events (created_by)
-  where created_by is not null;
 
 create or replace function public.set_updated_at()
 returns trigger
@@ -133,7 +124,7 @@ revoke all on function public.set_updated_at() from public, anon, authenticated;
 alter table public.profiles enable row level security;
 alter table public.events enable row level security;
 
-create policy "Members can read their own profile and staff can read all profiles"
+create policy "Users can read their own profile; staff can read all profiles"
   on public.profiles
   for select
   to authenticated
@@ -142,18 +133,12 @@ create policy "Members can read their own profile and staff can read all profile
     or (select public.has_club_role(array['admin', 'bod']))
   );
 
-create policy "Members and staff can update profile names"
+create policy "Users can update only their own profile name"
   on public.profiles
   for update
   to authenticated
-  using (
-    id = (select auth.uid())
-    or (select public.has_club_role(array['admin', 'bod']))
-  )
-  with check (
-    id = (select auth.uid())
-    or (select public.has_club_role(array['admin', 'bod']))
-  );
+  using (id = (select auth.uid()))
+  with check (id = (select auth.uid()));
 
 create policy "Anyone can read non-draft events"
   on public.events
@@ -161,19 +146,22 @@ create policy "Anyone can read non-draft events"
   to anon, authenticated
   using (status <> 'Draft');
 
-create policy "Club staff can read all events"
+create policy "Staff can read all events"
   on public.events
   for select
   to authenticated
   using ((select public.has_club_role(array['admin', 'bod'])));
 
-create policy "Club staff can create events"
+create policy "Staff can create events as themselves"
   on public.events
   for insert
   to authenticated
-  with check ((select public.has_club_role(array['admin', 'bod'])));
+  with check (
+    (select public.has_club_role(array['admin', 'bod']))
+    and created_by = (select auth.uid())
+  );
 
-create policy "Club staff can update events"
+create policy "Staff can update events"
   on public.events
   for update
   to authenticated
@@ -192,6 +180,9 @@ grant update (full_name) on table public.profiles to authenticated;
 
 revoke all on table public.events from public, anon, authenticated;
 grant select on table public.events to anon, authenticated;
-grant insert, update, delete on table public.events to authenticated;
+grant insert on table public.events to authenticated;
+grant update (title, description, event_date, location, status)
+  on table public.events to authenticated;
+grant delete on table public.events to authenticated;
 
 commit;
