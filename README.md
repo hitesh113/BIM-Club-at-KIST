@@ -1,6 +1,6 @@
 # College Club Management System
 
-A responsive React + TypeScript frontend for the BIM Club at KIST College of Management. The application uses realistic local mock data and is ready for a future Supabase adapter, but does not connect to Supabase or another backend yet.
+A responsive React + TypeScript frontend for the BIM Club at KIST College of Management. The application currently uses realistic local mock data. A reusable Supabase client is configured for future data integration; existing UI and application flows continue to use mock data.
 
 ## Run locally
 
@@ -10,6 +10,17 @@ npm run dev
 ```
 
 Open the local URL printed by Vite. Use `npm run build` to create a production build and `npm run lint` to run Oxlint.
+
+## Supabase configuration
+
+The official `@supabase/supabase-js` client is available from `src/lib/supabase.ts`. Configure the Vite environment before using it by creating a `.env.local` file in the project root:
+
+```env
+VITE_SUPABASE_URL=https://<your-project-ref>.supabase.co
+VITE_SUPABASE_PUBLISHABLE_KEY=<your-supabase-publishable-key>
+```
+
+For this project, the project reference is `okphwkwdxfvttprjylux`. Keep `.env.local` out of version control; it is ignored by Git. Vite exposes `VITE_` variables in the browser bundle, so use only a Supabase publishable key here, never a service-role key. The current app has no Supabase queries, authentication wiring, or database tables; its existing flows still use mock data.
 
 ## Demo roles
 
