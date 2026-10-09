@@ -3,17 +3,17 @@
 
 :root {
   font-family: 'DM Sans', sans-serif;
-  color: #19324e;
-  background: #f5f7fa;
-  --ink: #19324e;
-  --muted: #68798d;
-  --line: #e1e7ee;
+  color: #173a52;
+  background: #f5fafb;
+  --ink: #173a52;
+  --muted: #637b8a;
+  --line: #dce9ee;
   --paper: #ffffff;
-  --canvas: #f5f7fa;
-  --forest: #102c49;
-  --forest-deep: #0b2138;
-  --green: #245d9d;
-  --lime: #efbd49;
+  --canvas: #f5fafb;
+  --forest: #123b59;
+  --forest-deep: #0d2d46;
+  --green: #1385b5;
+  --lime: #f2bf3a;
   --display: 'Manrope', 'DM Sans', sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -27,11 +27,11 @@
 body { min-width: 360px; min-height: 100vh; margin: 0; }
 button, input, select, textarea { font: inherit; }
 button { color: inherit; }
-button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid #e87524; outline-offset: 2px; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid #f07135; outline-offset: 2px; }
 button:disabled { cursor: not-allowed; }
 img { display: block; max-width: 100%; }
 #root { min-height: 100vh; }
-::selection { background: #f4dfaa; color: #102c49; }
+::selection { background: #ccebf5; color: #123b59; }
 
 h1,
 h2 {
