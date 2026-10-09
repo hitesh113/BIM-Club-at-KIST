@@ -20,7 +20,7 @@ VITE_SUPABASE_URL=https://<your-project-ref>.supabase.co
 VITE_SUPABASE_PUBLISHABLE_KEY=<your-supabase-publishable-key>
 ```
 
-For this project, the project reference is `okphwkwdxfvttprjylux`. Keep `.env.local` out of version control; it is ignored by Git. Vite exposes `VITE_` variables in the browser bundle, so use only a Supabase publishable key here, never a service-role key. The current app has no Supabase queries, authentication wiring, or database tables; its existing flows still use mock data.
+For this project, the project reference is `okphwkwdxfvttprjylux`. Keep `.env.local` out of version control; it is ignored by Git. Vite exposes `VITE_` variables in the browser bundle, so use only a Supabase publishable key here, never a service-role key. The current app still uses mock data and has no Supabase queries or authentication wiring. An initial schema migration is prepared but has not been applied.
 
 Run `npm run test:supabase` to check project reachability. The temporary test sends an HTTP request to Supabase Auth's health endpoint and does not read or write database tables. A successful result confirms the endpoint responded; a 401/403 means the project is reachable but rejected the key, a 404 suggests the endpoint or project URL is incorrect, and a network or timeout error means the host could not be reached.
 
@@ -56,3 +56,9 @@ Domain types are in `src/types.ts`, sample records in `src/mockData.ts`, and the
 - `activity_logs`
 
 A future Supabase adapter can implement that contract and replace the mock repository without changing the role-based UI. Camera permission and server-side duplicate protection should be enforced again by the backend when Supabase is connected.
+
+## Initial database migration
+
+The initial `profiles` and `events` schema is in `supabase/migrations/20261009155000_create_profiles_and_events.sql`. To apply it manually, first confirm that the Supabase Dashboard is open for the intended project and review the migration. In **SQL Editor**, create a new query, paste the full migration file, and run it. Then verify that `profiles` and `events` exist and that RLS is enabled for both in **Table Editor**. This migration does not seed mock club records or connect the frontend to the database.
+
+New Auth users receive a linked profile with the `participant` role. Profile role changes are not permitted through the client API; an initial administrator must be assigned through a trusted administrative path, such as a carefully targeted update in the SQL Editor after that user has signed up. Never expose a service-role key in the browser.
