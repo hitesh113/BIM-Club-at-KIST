@@ -10,8 +10,8 @@ import {
 import {
   Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts'
-import { mockClubRepository } from './services/clubRepository'
-import type { ActivityLogEntry, AttendanceRecord, ClubEvent, ClubFile, Donation, EventStatus, Member, Notification, Registration, Role } from './types'
+import { clubRepository, mockClubRepository } from './services/clubRepository'
+import type { ActivityLogEntry, AttendanceRecord, ClubEvent, ClubFile, ClubSnapshot, Donation, EventStatus, Member, Notification, Registration, Role } from './types'
 import './App.css'
 
 type Page = 'home' | 'about' | 'events' | 'event-detail' | 'login' | 'register' | 'dashboard' | 'manage-events' | 'registrations' | 'attendance' | 'files' | 'donations' | 'users' | 'reports' | 'leaderboard' | 'notifications' | 'activity' | 'profile'
@@ -75,7 +75,24 @@ const formatDate = (value: string, options: Intl.DateTimeFormatOptions = { month
 const formatMoney = (value: number) => `NPR ${value.toLocaleString('en-NP')}`
 
 function App() {
-  const [snapshot] = useState(() => mockClubRepository.loadSnapshot())
+  const [snapshot, setSnapshot] = useState<ClubSnapshot>(() => mockClubRepository.loadSnapshot() as ClubSnapshot)
+  useEffect(() => {
+    let isMounted = true
+
+    const loadData = async () => {
+      const nextSnapshot = await clubRepository.loadSnapshot()
+      if (isMounted) {
+        setSnapshot(nextSnapshot)
+      }
+    }
+
+    void loadData()
+
+    return () => {
+      isMounted = false
+    }
+  }, [])
+
   const [page, setPage] = useState<Page>('home')
   const [role, setRole] = useState<Role | null>(null)
   const [events, setEvents] = useState(snapshot.events)

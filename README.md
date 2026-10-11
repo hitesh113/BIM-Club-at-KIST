@@ -1,6 +1,6 @@
 # College Club Management System
 
-A responsive React + TypeScript frontend for the BIM Club at KIST College of Management. The application currently uses realistic local mock data. A reusable Supabase client is configured for future data integration; existing UI and application flows continue to use mock data.
+A responsive React + TypeScript frontend for the BIM Club at KIST College of Management. The app now loads from Supabase when the project environment is configured and falls back to the local mock snapshot when it is not.
 
 ## Run locally
 
@@ -28,7 +28,7 @@ VITE_SUPABASE_URL=https://<your-project-ref>.supabase.co
 VITE_SUPABASE_PUBLISHABLE_KEY=<your-supabase-publishable-key>
 ```
 
-Restart the Vite dev server after adding or changing environment values. Without both values, the Supabase client reports a missing configuration error. Keep `.env.local` out of version control; commit only `.env.example` with placeholders. Vite exposes `VITE_` variables in the browser bundle, so use only the Supabase publishable key here, never a secret or service-role key. Share project configuration through an approved private channel, not by committing the populated file. The current app still uses mock data and has no Supabase queries or authentication wiring. An initial schema migration is prepared but has not been applied.
+Restart the Vite dev server after adding or changing environment values. Without both values, the app continues with the local mock snapshot. Keep `.env.local` out of version control; commit only `.env.example` with placeholders. Vite exposes `VITE_` variables in the browser bundle, so use only the Supabase publishable key here, never a secret or service-role key. Share project configuration through an approved private channel, not by committing the populated file. The application now supports a Supabase-backed repository adapter and falls back gracefully when the environment is not configured. Apply the migration files in Supabase before depending on live data.
 
 Run `npm run test:supabase` to check project reachability. The temporary test sends an HTTP request to Supabase Auth's health endpoint and does not read or write database tables. A successful result confirms the endpoint responded; a 401/403 means the project is reachable but rejected the key, a 404 suggests the endpoint or project URL is incorrect, and a network or timeout error means the host could not be reached.
 
@@ -63,7 +63,7 @@ Domain types are in `src/types.ts`, sample records in `src/mockData.ts`, and the
 - `notifications`
 - `activity_logs`
 
-A future Supabase adapter can implement that contract and replace the mock repository without changing the role-based UI. Camera permission and server-side duplicate protection should be enforced again by the backend when Supabase is connected.
+The current repository adapter implements that contract against Supabase when the app is configured, while preserving the mock fallback for local development and demos. Camera permission and server-side duplicate protection should be enforced again by the backend when Supabase is connected.
 
 ## Initial database migration
 
