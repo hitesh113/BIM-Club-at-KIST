@@ -10,12 +10,17 @@ import {
 import {
   Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts'
+import type { Session, User } from '@supabase/supabase-js'
+import { supabase } from './lib/supabase'
 import { clubRepository, mockClubRepository } from './services/clubRepository'
 import type { ActivityLogEntry, AttendanceRecord, ClubEvent, ClubFile, ClubSnapshot, Donation, EventStatus, Member, Notification, Registration, Role } from './types'
 import './App.css'
 
 type Page = 'home' | 'about' | 'events' | 'event-detail' | 'login' | 'register' | 'dashboard' | 'manage-events' | 'registrations' | 'attendance' | 'files' | 'donations' | 'users' | 'reports' | 'leaderboard' | 'notifications' | 'activity' | 'profile'
 type EventForm = Omit<ClubEvent, 'id'>
+type AuthFeedback = { kind: 'success' | 'error'; message: string } | null
+type AuthProfile = { id: string; full_name: string; email: string | null; role: string; created_at: string }
+const privatePages = new Set<Page>(['dashboard', 'manage-events', 'registrations', 'attendance', 'files', 'donations', 'users', 'reports', 'leaderboard', 'notifications', 'activity', 'profile'])
 
 const memberId = 'member-100'
 const blankEvent: EventForm = {
@@ -95,6 +100,12 @@ function App() {
 
   const [page, setPage] = useState<Page>('home')
   const [role, setRole] = useState<Role | null>(null)
+  const [authUser, setAuthUser] = useState<User | null>(null)
+  const [authProfile, setAuthProfile] = useState<AuthProfile | null>(null)
+  const [authLoading, setAuthLoading] = useState(Boolean(supabase))
+  const [authBusy, setAuthBusy] = useState(false)
+  const [authFeedback, setAuthFeedback] = useState<AuthFeedback>(null)
+  const profileRequest = useRef(0)
   const [events, setEvents] = useState(snapshot.events)
   const [registrations, setRegistrations] = useState(snapshot.registrations)
   const [donations, setDonations] = useState(snapshot.donations)
@@ -116,16 +127,98 @@ function App() {
   const [donationModal, setDonationModal] = useState(false)
   const [editingEvent, setEditingEvent] = useState<ClubEvent | null>(null)
   const [eventForm, setEventForm] = useState<EventForm>(blankEvent)
-  const [roleChoice, setRoleChoice] = useState<Role>('Participant')
   const [scannerOpen, setScannerOpen] = useState(false)
 
-  const currentMember = members.find((member) => member.id === memberId) ?? snapshot.members[0]
-  const myRegistrations = registrations.filter((registration) => registration.memberId === memberId && registration.status !== 'Cancelled')
+  const fallbackMember = members.find((member) => member.id === memberId) ?? snapshot.members[0]
+  const currentMember: Member = authProfile
+    ? {
+        id: authProfile.id,
+        name: authProfile.full_name,
+        email: authProfile.email ?? authUser?.email ?? '',
+        role: role ?? 'Participant',
+        joined: authProfile.created_at.slice(0, 10),
+        points: members.find((member) => member.id === authProfile.id)?.points ?? 0,
+      }
+    : fallbackMember
+  const myRegistrations = registrations.filter((registration) => registration.memberId === currentMember.id && registration.status !== 'Cancelled')
   const selectedEvent = events.find((event) => event.id === selectedId)
   const filteredEvents = useMemo(() => events.filter((event) => {
     const textMatch = `${event.title} ${event.location} ${event.category}`.toLowerCase().includes(search.toLowerCase())
     return textMatch && (category === 'All categories' || category === event.category) && (statusFilter === 'All statuses' || statusFilter === event.status)
   }), [events, search, category, statusFilter])
+
+  const syncAuthSession = async (session: Session | null): Promise<boolean> => {
+    const requestId = ++profileRequest.current
+    if (!session) {
+      setAuthUser(null)
+      setAuthProfile(null)
+      setRole(null)
+      setAuthLoading(false)
+      setPage((currentPage) => privatePages.has(currentPage) ? 'login' : currentPage)
+      return true
+    }
+
+    setAuthUser(session.user)
+    setAuthLoading(true)
+    const { data, error } = await supabase!
+      .from('profiles')
+      .select('id, full_name, email, role, created_at')
+      .eq('id', session.user.id)
+      .single()
+
+    if (requestId !== profileRequest.current) return false
+    if (error) {
+      setAuthProfile(null)
+      setRole(null)
+      setAuthLoading(false)
+      setAuthFeedback({ kind: 'error', message: `Signed in, but your profile could not be loaded: ${error.message}` })
+      setPage((currentPage) => privatePages.has(currentPage) ? 'login' : currentPage)
+      return false
+    }
+
+    const profile = data as AuthProfile
+    setAuthProfile(profile)
+    setRole(profile.role === 'admin' ? 'Admin' : profile.role === 'bod' ? 'BOD' : 'Participant')
+    setAuthLoading(false)
+    return true
+  }
+
+  useEffect(() => {
+    if (!supabase) return
+
+    let isMounted = true
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION') return
+      window.setTimeout(() => {
+        if (!isMounted) return
+        void syncAuthSession(session).catch((error: unknown) => {
+          if (!isMounted) return
+          setAuthLoading(false)
+          setAuthFeedback({ kind: 'error', message: error instanceof Error ? error.message : 'Unable to restore your session.' })
+        })
+      }, 0)
+    })
+
+    void supabase.auth.getSession().then(({ data, error }) => {
+      if (!isMounted) return
+      if (error) {
+        setAuthLoading(false)
+        setAuthFeedback({ kind: 'error', message: `Unable to restore your session: ${error.message}` })
+        return
+      }
+      return syncAuthSession(data.session)
+    }).catch((error: unknown) => {
+      if (!isMounted) return
+      setAuthLoading(false)
+      setAuthFeedback({ kind: 'error', message: error instanceof Error ? error.message : 'Unable to restore your session.' })
+    })
+
+    return () => {
+      isMounted = false
+      profileRequest.current += 1
+      subscription.unsubscribe()
+    }
+  }, [])
 
   const notify = (message: string) => {
     setToast(message)
@@ -135,21 +228,106 @@ function App() {
   const addNotification = (item: Omit<Notification, 'id' | 'read'>) => setNotifications((items) => [{ ...item, id: `note-${Date.now()}`, read: false }, ...items])
   const markNotificationsRead = () => setNotifications((items) => items.map((item) => item.recipient === 'All' || item.recipient === role ? { ...item, read: true } : item))
   const navigate = (target: Page) => {
+    if (privatePages.has(target) && (!authUser || !role)) {
+      if (authLoading) {
+        setPage(target)
+      } else {
+        setPage('login')
+        setAuthFeedback({ kind: 'error', message: 'Please sign in to access your BIM Club workspace.' })
+      }
+      return
+    }
     setPage(target)
     setMenuOpen(false)
     setNotificationOpen(false)
     setProfileOpen(false)
   }
-  const signIn = (nextRole: Role) => {
-    setRole(nextRole)
-    setRoleChoice(nextRole)
-    navigate('dashboard')
-    notify(`Signed in as ${nextRole}`)
+  const signIn = async (email: string, password: string) => {
+    if (!supabase) {
+      setAuthFeedback({ kind: 'error', message: 'Supabase is not configured. Check the VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY environment variables.' })
+      return
+    }
+    setAuthBusy(true)
+    setAuthFeedback(null)
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({ email: email.trim(), password })
+      if (error) {
+        setAuthFeedback({ kind: 'error', message: error.message })
+        return
+      }
+      const profileReady = await syncAuthSession(data.session)
+      if (profileReady) {
+        setAuthFeedback({ kind: 'success', message: 'You are signed in.' })
+        notify('You are signed in.')
+        setPage('dashboard')
+      }
+    } catch (error) {
+      setAuthFeedback({ kind: 'error', message: error instanceof Error ? error.message : 'Sign in failed. Please try again.' })
+    } finally {
+      setAuthBusy(false)
+    }
   }
-  const signOut = () => {
-    setRole(null)
-    navigate('home')
-    notify('You have been signed out')
+
+  const signUp = async (fullName: string, email: string, password: string) => {
+    if (!supabase) {
+      setAuthFeedback({ kind: 'error', message: 'Supabase is not configured. Check the VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY environment variables.' })
+      return
+    }
+    if (!fullName.trim()) {
+      setAuthFeedback({ kind: 'error', message: 'Enter your full name to create an account.' })
+      return
+    }
+    setAuthBusy(true)
+    setAuthFeedback(null)
+    try {
+      const { data, error } = await supabase.auth.signUp({
+        email: email.trim(),
+        password,
+        options: { data: { full_name: fullName.trim() } },
+      })
+      if (error) {
+        setAuthFeedback({ kind: 'error', message: error.message })
+        return
+      }
+      if (data.session) {
+        const profileReady = await syncAuthSession(data.session)
+        if (profileReady) {
+          setAuthFeedback({ kind: 'success', message: 'Your account is ready and you are signed in.' })
+          notify('Your account is ready.')
+          setPage('dashboard')
+        }
+      } else {
+        setAuthFeedback({ kind: 'success', message: 'Your account was created. Check your email for a confirmation link, then sign in.' })
+        navigate('login')
+      }
+    } catch (error) {
+      setAuthFeedback({ kind: 'error', message: error instanceof Error ? error.message : 'Registration failed. Please try again.' })
+    } finally {
+      setAuthBusy(false)
+    }
+  }
+
+  const signOut = async () => {
+    if (!supabase) return
+    setAuthBusy(true)
+    try {
+      const { error } = await supabase.auth.signOut()
+      if (error) {
+        setAuthFeedback({ kind: 'error', message: error.message })
+        notify(error.message)
+        return
+      }
+      await syncAuthSession(null)
+      setAuthFeedback({ kind: 'success', message: 'You have been signed out.' })
+      notify('You have been signed out.')
+      navigate('home')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Sign out failed. Please try again.'
+      setAuthFeedback({ kind: 'error', message })
+      notify(message)
+    } finally {
+      setAuthBusy(false)
+    }
   }
   const openEvent = (id: string) => {
     setSelectedId(id)
@@ -177,11 +355,16 @@ function App() {
     notify(`Event marked ${status.toLowerCase()}`)
   }
   const register = (event: ClubEvent) => {
+    if (!authUser) {
+      navigate('login')
+      setAuthFeedback({ kind: 'error', message: 'Sign in to register for an event.' })
+      return
+    }
     const count = registrations.filter((item) => item.eventId === event.id && item.status !== 'Cancelled').length
     if (event.status !== 'Registration Open' || count >= event.maxParticipants || event.registrationDeadline < '2026-10-05') return notify('Registration is closed or this event is full')
     if (myRegistrations.some((item) => item.eventId === event.id)) return notify('You are already registered for this event')
     setRegistrations((items) => [{
-      id: `reg-${Date.now()}`, eventId: event.id, memberId, name: currentMember.name,
+      id: `reg-${Date.now()}`, eventId: event.id, memberId: currentMember.id, name: currentMember.name,
       email: currentMember.email, registeredAt: '2026-10-05', status: 'Confirmed',
     }, ...items])
     addNotification({ title: 'Event registration successful', detail: `You are registered for ${event.title}.`, timestamp: 'Just now', recipient: 'Participant' })
@@ -189,7 +372,7 @@ function App() {
     notify(`You're registered for ${event.title}`)
   }
   const cancelRegistration = (id: string) => {
-    setRegistrations((items) => items.map((item) => item.memberId === memberId && item.eventId === id ? { ...item, status: 'Cancelled' } : item))
+    setRegistrations((items) => items.map((item) => item.memberId === currentMember.id && item.eventId === id ? { ...item, status: 'Cancelled' } : item))
     notify('Registration cancelled')
   }
 
@@ -201,10 +384,10 @@ function App() {
         <button className="brand brand-sidebar" onClick={() => navigate('dashboard')}><span className="brand-mark"><GraduationCap size={21} /></span><span className="brand-copy"><strong>BIM<span>club</span></strong><small>KIST COLLEGE OF MANAGEMENT</small></span></button>
         <div className="workspace-label">WORKSPACE</div>
         <nav className="side-nav" aria-label="Dashboard navigation">{navigation[role].map(({ label, page: target, icon: Icon }) => <button key={label} className={`side-link ${page === target ? 'side-link-active' : ''}`} onClick={() => navigate(target)}><Icon size={17} /><span>{label}</span>{label === 'Registrations' && <i className="nav-count">6</i>}</button>)}</nav>
-        <div className="sidebar-bottom"><div className="semester-card"><span className="semester-icon"><Building2 size={15} /></span><div><b>Fall semester</b><small>2026 · KIST College</small></div><ChevronDown size={14} /></div><div className="sidebar-user"><Avatar name={displayName(role, currentMember)} /><div><b>{displayName(role, currentMember)}</b><small>{role} account</small></div><button className="icon-button" aria-label="Open profile" onClick={() => navigate('profile')}><Settings2 size={16} /></button></div></div>
+        <div className="sidebar-bottom"><div className="semester-card"><span className="semester-icon"><Building2 size={15} /></span><div><b>Fall semester</b><small>2026 · KIST College</small></div><ChevronDown size={14} /></div><div className="sidebar-user"><Avatar name={currentMember.name} /><div><b>{currentMember.name}</b><small>{role} account</small></div><button className="icon-button" aria-label="Open profile" onClick={() => navigate('profile')}><Settings2 size={16} /></button></div></div>
       </aside>
       <div className="main-column">
-        <header className="app-header"><button className="icon-button mobile-menu-button" aria-label="Open navigation" onClick={() => setMenuOpen(true)}><Menu size={20} /></button><div className="breadcrumb"><span>Workspace</span><ChevronLeft size={14} /><b>{pageTitles[page]}</b></div><div className="header-actions"><button className="icon-button header-search" aria-label="Search events" onClick={() => { navigate(role === 'Participant' ? 'events' : 'manage-events'); setSearch('') }}><Search size={18} /></button><div className="popover-anchor"><button className="icon-button notification-button" aria-label="Notifications" onClick={() => setNotificationOpen(!notificationOpen)}><Bell size={18} /><i /></button>{notificationOpen && <div className="popover notification-popover"><div className="popover-title">Notifications <span>2 new</span></div><p><b>Workshop registrations are open</b><small>Web Development Workshop · 2h ago</small></p><p><b>New donation received</b><small>NPR 1,500 from Aarav · Yesterday</small></p></div>}</div><div className="popover-anchor"><button className="header-profile" onClick={() => setProfileOpen(!profileOpen)}><Avatar name={displayName(role, currentMember)} /><span>{shortName(role, currentMember)}</span><ChevronDown size={14} /></button>{profileOpen && <div className="popover profile-popover"><div className="popover-title">Switch demo role</div>{(['Admin', 'BOD', 'Participant'] as Role[]).map((item) => <button key={item} onClick={() => signIn(item)}>{item}{item === role && <Check size={14} />}</button>)}<button className="signout-option" onClick={signOut}><LogOut size={14} /> Sign out</button></div>}</div></div></header>
+        <header className="app-header"><button className="icon-button mobile-menu-button" aria-label="Open navigation" onClick={() => setMenuOpen(true)}><Menu size={20} /></button><div className="breadcrumb"><span>Workspace</span><ChevronLeft size={14} /><b>{pageTitles[page]}</b></div><div className="header-actions"><button className="icon-button header-search" aria-label="Search events" onClick={() => { navigate(role === 'Participant' ? 'events' : 'manage-events'); setSearch('') }}><Search size={18} /></button><div className="popover-anchor"><button className="icon-button notification-button" aria-label="Notifications" onClick={() => setNotificationOpen(!notificationOpen)}><Bell size={18} /><i /></button>{notificationOpen && <div className="popover notification-popover"><div className="popover-title">Notifications <span>2 new</span></div><p><b>Workshop registrations are open</b><small>Web Development Workshop · 2h ago</small></p><p><b>New donation received</b><small>NPR 1,500 from Aarav · Yesterday</small></p></div>}</div><div className="popover-anchor"><button className="header-profile" onClick={() => setProfileOpen(!profileOpen)}><Avatar name={currentMember.name} /><span>{shortName(role, currentMember)}</span><ChevronDown size={14} /></button>{profileOpen && <div className="popover profile-popover"><div className="popover-title">{role} account</div><button className="signout-option" onClick={() => void signOut()}><LogOut size={14} /> Sign out</button></div>}</div></div></header>
         <main className="page-content"><PageHeading page={page} role={role} onCreate={() => startEventEditor()} onNavigate={navigate} />{renderContent()}</main>
       </div>
     </>}
@@ -216,17 +399,21 @@ function App() {
   </div>
 
   function renderContent() {
+    if (privatePages.has(page) && authLoading) return <div className="auth-loading" role="status">Restoring your session…</div>
+    if (privatePages.has(page) && (!authUser || !role)) {
+      return <AuthPage mode="login" busy={authBusy} feedback={authFeedback} onSignIn={signIn} onSignUp={signUp} onNavigate={navigate} />
+    }
     if (!role) {
       if (page === 'about') return <AboutPage events={events} members={members} registrations={registrations} onNavigate={navigate} />
-      if (page === 'events') return <><EventsPage events={filteredEvents} search={search} setSearch={setSearch} category={category} setCategory={setCategory} statusFilter={statusFilter} setStatusFilter={setStatusFilter} onEvent={openEvent} onNavigate={navigate} /><PublicFooter onNavigate={navigate} /></>
-      if (page === 'event-detail') return <EventDetails event={selectedEvent} registrations={registrations} onBack={() => navigate('events')} onRegister={() => navigate('login')} />
-      if (page === 'login' || page === 'register') return <AuthPage mode={page} roleChoice={roleChoice} setRoleChoice={setRoleChoice} onSignIn={signIn} onNavigate={navigate} />
+      if (page === 'events') return <><EventsPage events={filteredEvents} search={search} setSearch={setSearch} category={category} setCategory={setCategory} statusFilter={statusFilter} setStatusFilter={setStatusFilter} onEvent={openEvent} /><PublicFooter onNavigate={navigate} /></>
+      if (page === 'event-detail') return <EventDetails event={selectedEvent} registrations={registrations} onRegister={() => navigate('login')} />
+      if (page === 'login' || page === 'register') return <AuthPage mode={page} busy={authBusy} feedback={authFeedback} onSignIn={signIn} onSignUp={signUp} onNavigate={navigate} />
       return <LandingPage events={events} onNavigate={navigate} onEvent={openEvent} />
     }
     const countFor = (id: string) => registrations.filter((item) => item.eventId === id && item.status !== 'Cancelled').length
     if (page === 'dashboard') return <Dashboard role={role} currentMember={currentMember} events={events} registrations={registrations} donations={donations} myRegistrations={myRegistrations} onNavigate={navigate} onCreate={() => startEventEditor()} onEvent={openEvent} />
-    if (page === 'events') return <EventsPage events={filteredEvents} search={search} setSearch={setSearch} category={category} setCategory={setCategory} statusFilter={statusFilter} setStatusFilter={setStatusFilter} onEvent={openEvent} onNavigate={navigate} />
-    if (page === 'event-detail') return <EventDetails event={selectedEvent} registrations={registrations} isRegistered={myRegistrations.some((item) => item.eventId === selectedEvent?.id)} onBack={() => navigate(role === 'Participant' ? 'events' : 'manage-events')} onRegister={() => selectedEvent && register(selectedEvent)} onCancel={() => selectedEvent && cancelRegistration(selectedEvent.id)} />
+    if (page === 'events') return <EventsPage events={filteredEvents} search={search} setSearch={setSearch} category={category} setCategory={setCategory} statusFilter={statusFilter} setStatusFilter={setStatusFilter} onEvent={openEvent} />
+    if (page === 'event-detail') return <EventDetails event={selectedEvent} registrations={registrations} isRegistered={myRegistrations.some((item) => item.eventId === selectedEvent?.id)} onRegister={() => selectedEvent && register(selectedEvent)} onCancel={() => selectedEvent && cancelRegistration(selectedEvent.id)} />
     if (page === 'manage-events') return <ManageEvents events={filteredEvents} countFor={countFor} search={search} setSearch={setSearch} category={category} setCategory={setCategory} statusFilter={statusFilter} setStatusFilter={setStatusFilter} onEdit={startEventEditor} onCreate={() => startEventEditor()} onEvent={openEvent} onStatus={setEventStatus} />
     if (page === 'registrations') return <RegistrationsPage events={events} registrations={registrations} query={query} setQuery={setQuery} onAttendance={(id) => { setRegistrations((items) => items.map((item) => item.id === id ? { ...item, status: 'Attended' } : item)); notify('Attendance recorded') }} />
     if (page === 'attendance') return <AttendancePage role={role} registrations={registrations} attendance={attendance} events={events} onScan={() => setScannerOpen(true)} />
@@ -238,14 +425,17 @@ function App() {
     if (page === 'leaderboard') return <LeaderboardPage members={members} currentMember={currentMember} />
     if (page === 'notifications') return <NotificationsPage notifications={notifications.filter((item) => item.recipient === 'All' || item.recipient === role)} onRead={markNotificationsRead} />
     if (page === 'activity') return <ActivityLogPage entries={activityLog} />
-    if (page === 'profile') return <ProfilePage member={currentMember} role={role} onRole={signIn} onSignOut={signOut} />
+    if (page === 'profile') return <ProfilePage member={currentMember} role={role} busy={authBusy} onSignOut={signOut} />
     if (page === 'about') return <AboutPage events={events} members={members} registrations={registrations} onNavigate={navigate} />
     return <LandingPage events={events} onNavigate={navigate} onEvent={openEvent} />
   }
 }
 
-function displayName(role: Role | null, member: Member) { return role === 'Admin' ? 'Maya Adhikari' : role === 'BOD' ? 'Sujan Karki' : member.name }
-function shortName(role: Role | null, member: Member) { return role === 'Admin' ? 'Maya A.' : role === 'BOD' ? 'Sujan K.' : `${member.name.split(' ')[0]} ${member.name.split(' ')[1][0]}.` }
+function displayName(_role: Role | null, member: Member) { return member.name }
+function shortName(_role: Role | null, member: Member) {
+  const [firstName, ...lastNames] = member.name.trim().split(/\s+/)
+  return `${firstName}${lastNames[0] ? ` ${lastNames[0][0]}.` : ''}`
+}
 function Avatar({ name, size = false }: { name: string; size?: boolean }) { const initials = name.split(' ').map((part) => part[0]).join('').slice(0, 2); return <span className={`avatar avatar-${initials.toLowerCase()} ${size ? 'avatar-large' : ''}`}>{initials}</span> }
 function PublicHeader({ page, onNavigate, onSignIn }: { page: Page; onNavigate: (page: Page) => void; onSignIn: () => void }) {
   return <header className={`public-header ${page === 'home' ? 'public-header-home' : ''}`}><button className="brand" onClick={() => onNavigate('home')}><span className="brand-mark"><GraduationCap size={21} /></span><span className="brand-copy"><strong>BIM<span>club</span></strong><small>KIST COLLEGE OF MANAGEMENT</small></span></button><nav className="public-nav"><button className={page === 'home' ? 'public-active' : ''} onClick={() => onNavigate('home')}>Home</button><button className={page === 'about' ? 'public-active' : ''} onClick={() => onNavigate('about')}>About</button><button className={page === 'events' || page === 'event-detail' ? 'public-active' : ''} onClick={() => onNavigate('events')}>Events</button></nav><button className="button button-dark public-login" onClick={onSignIn}>Member sign in <ArrowRight size={15} /></button></header>
@@ -439,7 +629,6 @@ function BodCarousel() {
     <div className="bod-dots" role="group" aria-label="Choose board member group">{groups.map((group, index) => <button key={group[0].name} className={`bod-dot ${activeGroup === index ? 'bod-dot-active' : ''}`} aria-label={`Show board member group ${index + 1}`} aria-current={activeGroup === index ? 'true' : undefined} onClick={() => goToGroup(index)} />)}</div>
   </section>
 }
-function PublicBackHome({ onNavigate }: { onNavigate: (page: Page) => void }) { return <button className="button button-quiet public-back-home" onClick={() => onNavigate('home')}><ChevronLeft size={15} /> Back to home</button> }
 function AboutPage({ events, members, registrations, onNavigate }: { events: ClubEvent[]; members: Member[]; registrations: Registration[]; onNavigate: (page: Page) => void }) {
   const [activeFeature, setActiveFeature] = useState<string | null>(null)
   const [activeStep, setActiveStep] = useState(0)
@@ -468,11 +657,10 @@ function AboutPage({ events, members, registrations, onNavigate }: { events: Clu
     <section className="about-modern-hero">
       <div className="about-modern-hero-inner">
         <div className="about-modern-copy">
-          <div className="public-page-action"><PublicBackHome onNavigate={onNavigate} /></div>
           <div className="about-hero-badge"><span className="eyebrow-dot" /> BIM CLUB <i>•</i> KIST COLLEGE</div>
-          <h1>About BIM Club</h1>
+          <h1>BIM Club</h1>
           <h2>KIST College of Management</h2>
-          <p>A student community for technology, learning, and collaboration.</p>
+          <p>Student-led community focused on technology, innovation, collaboration, and professional growth.</p>
           <div className="hero-actions">
             <button className="button button-lime" onClick={() => onNavigate('events')}>Explore Events <ArrowRight size={16} /></button>
             <button className="button button-outline-light" onClick={() => onNavigate('register')}>Join the Club</button>
@@ -520,10 +708,9 @@ function AboutPage({ events, members, registrations, onNavigate }: { events: Clu
     <PublicFooter onNavigate={onNavigate} />
   </div>
 }
-function EventsPage({ events, search, setSearch, category, setCategory, statusFilter, setStatusFilter, onEvent, onNavigate }: { events: ClubEvent[]; search: string; setSearch: (value: string) => void; category: string; setCategory: (value: string) => void; statusFilter: string; setStatusFilter: (value: string) => void; onEvent: (id: string) => void; onNavigate: (page: Page) => void }) {
+function EventsPage({ events, search, setSearch, category, setCategory, statusFilter, setStatusFilter, onEvent }: { events: ClubEvent[]; search: string; setSearch: (value: string) => void; category: string; setCategory: (value: string) => void; statusFilter: string; setStatusFilter: (value: string) => void; onEvent: (id: string) => void }) {
   return <div className="events-page">
     <div className="events-content">
-      <div className="events-back"><PublicBackHome onNavigate={onNavigate} /></div>
       <div className="events-intro">
         <div className="eyebrow">BIM CLUB ACTIVITIES</div>
         <h1>Explore <em>Events.</em></h1>
@@ -540,14 +727,47 @@ function EventsPage({ events, search, setSearch, category, setCategory, statusFi
     </div>
   </div>
 }
-function EventDetails({ event, registrations, isRegistered = false, onBack, onRegister, onCancel }: { event?: ClubEvent; registrations: Registration[]; isRegistered?: boolean; onBack: () => void; onRegister: () => void; onCancel?: () => void }) {
+function EventDetails({ event, registrations, isRegistered = false, onRegister, onCancel }: { event?: ClubEvent; registrations: Registration[]; isRegistered?: boolean; onRegister: () => void; onCancel?: () => void }) {
   if (!event) return <EmptyState title="Event not found" detail="This event may have been removed." />
   const count = registrations.filter((item) => item.eventId === event.id && item.status !== 'Cancelled').length
   const available = Math.max(0, event.maxParticipants - count)
   const open = event.status === 'Registration Open' && available > 0 && event.registrationDeadline >= '2026-10-05'
-  return <div className="detail-page"><button className="back-link" onClick={onBack}><ChevronLeft size={15} /> Back to events</button><div className="detail-layout"><div className="detail-main"><div className="detail-image"><img src={event.image} alt="" /><span className="category-pill">{event.category}</span></div><div className="detail-kicker"><StatusBadge status={event.status} /> <span>·</span> {formatDate(event.date, { month: 'long', day: 'numeric', year: 'numeric' })}</div><h1>{event.title}</h1><p className="detail-description">{event.description}</p><div className="detail-facts"><div><CalendarDays size={18} /><span><small>DATE & TIME</small><b>{formatDate(event.date, { weekday: 'long', month: 'long', day: 'numeric' })}</b><span>{event.startTime} – {event.endTime}</span></span></div><div><MapPin size={18} /><span><small>LOCATION</small><b>{event.location}</b><span>Kathmandu, Nepal</span></span></div><div><Users size={18} /><span><small>CAPACITY</small><b>{event.maxParticipants} seats</b><span>Registration closes {formatDate(event.registrationDeadline, { month: 'long', day: 'numeric' })}</span></span></div></div><div className="detail-about"><h2>About this event</h2><p>{event.description} Bring your laptop, your questions, and an open mind. All BIM students are welcome; no prior experience is needed.</p></div></div><aside className="registration-card"><div className="eyebrow">SAVE YOUR SEAT</div><h3>{formatDate(event.date, { month: 'long', day: 'numeric' })}</h3><p>{event.startTime} – {event.endTime}</p><div className="capacity-line"><div><b>{event.maxParticipants}</b><span> seats</span></div><small>{count} registered</small></div><div className="capacity-track"><span style={{ width: `${Math.min(100, count / event.maxParticipants * 100)}%` }} /></div><div className="seat-count"><span><i />{available} seats available</span><b>{Math.round(count / event.maxParticipants * 100)}%</b></div>{isRegistered ? <><div className="registered-note"><CheckCircle2 size={17} /><span><b>You’re on the list</b><small>Registration confirmed</small></span></div>{onCancel && <button className="button button-cancel" onClick={onCancel}>Cancel registration</button>}</> : <button className={`button ${open ? 'button-primary' : 'button-disabled'}`} disabled={!open} onClick={onRegister}>{open ? 'Register for event' : available === 0 ? 'Event is full' : 'Registration closed'} {open && <ArrowRight size={15} />}</button>}<small className="registration-note">No fee · Open to KIST students</small></aside></div></div>
+  return <div className="detail-page"><div className="detail-layout"><div className="detail-main"><div className="detail-image"><img src={event.image} alt="" /><span className="category-pill">{event.category}</span></div><div className="detail-kicker"><StatusBadge status={event.status} /> <span>·</span> {formatDate(event.date, { month: 'long', day: 'numeric', year: 'numeric' })}</div><h1>{event.title}</h1><p className="detail-description">{event.description}</p><div className="detail-facts"><div><CalendarDays size={18} /><span><small>DATE & TIME</small><b>{formatDate(event.date, { weekday: 'long', month: 'long', day: 'numeric' })}</b><span>{event.startTime} – {event.endTime}</span></span></div><div><MapPin size={18} /><span><small>LOCATION</small><b>{event.location}</b><span>Kathmandu, Nepal</span></span></div><div><Users size={18} /><span><small>CAPACITY</small><b>{event.maxParticipants} seats</b><span>Registration closes {formatDate(event.registrationDeadline, { month: 'long', day: 'numeric' })}</span></span></div></div><div className="detail-about"><h2>About this event</h2><p>{event.description} Bring your laptop, your questions, and an open mind. All BIM students are welcome; no prior experience is needed.</p></div></div><aside className="registration-card"><div className="eyebrow">SAVE YOUR SEAT</div><h3>{formatDate(event.date, { month: 'long', day: 'numeric' })}</h3><p>{event.startTime} – {event.endTime}</p><div className="capacity-line"><div><b>{event.maxParticipants}</b><span> seats</span></div><small>{count} registered</small></div><div className="capacity-track"><span style={{ width: `${Math.min(100, count / event.maxParticipants * 100)}%` }} /></div><div className="seat-count"><span><i />{available} seats available</span><b>{Math.round(count / event.maxParticipants * 100)}%</b></div>{isRegistered ? <><div className="registered-note"><CheckCircle2 size={17} /><span><b>You’re on the list</b><small>Registration confirmed</small></span></div>{onCancel && <button className="button button-cancel" onClick={onCancel}>Cancel registration</button>}</> : <button className={`button ${open ? 'button-primary' : 'button-disabled'}`} disabled={!open} onClick={onRegister}>{open ? 'Register for event' : available === 0 ? 'Event is full' : 'Registration closed'} {open && <ArrowRight size={15} />}</button>}<small className="registration-note">No fee · Open to KIST students</small></aside></div></div>
 }
-function AuthPage({ mode, roleChoice, setRoleChoice, onSignIn, onNavigate }: { mode: 'login' | 'register'; roleChoice: Role; setRoleChoice: (role: Role) => void; onSignIn: (role: Role) => void; onNavigate: (page: Page) => void }) { return <div className="auth-page"><div className="auth-art"><div className="auth-art-inner"><span className="eyebrow"><span className="eyebrow-dot" /> KIST BIM CLUB</span><h2>Make your<br />next thing<br /><em>together.</em></h2><p>A community for curious people and practical ideas.</p><img src="https://images.unsplash.com/photo-1521737711867-e3b97375f902?auto=format&fit=crop&w=1000&q=85" alt="A team working together" /><span className="auth-caption">BIM CLUB · KIST COLLEGE OF MANAGEMENT</span></div></div><div className="auth-form-wrap"><button className="back-link" onClick={() => onNavigate('home')}><ChevronLeft size={15} /> Back to home</button><div className="auth-form"><div className="eyebrow">{mode === 'login' ? 'MEMBER ACCESS' : 'BECOME A MEMBER'}</div><h1>{mode === 'login' ? 'Welcome back.' : 'Make yourself at home.'}</h1><p>{mode === 'login' ? 'Sign in to your BIM Club workspace.' : 'Create a member profile to join events and club activities.'}</p>{mode === 'register' && <label className="form-label">Full name<input defaultValue="Aarav Shrestha" /></label>}<label className="form-label">College email<input type="email" defaultValue="aarav.shrestha@kist.edu.np" /></label><label className="form-label">Password<input type="password" defaultValue="kistclub2026" /></label><label className="form-label">Demo role<select value={roleChoice} onChange={(event) => setRoleChoice(event.target.value as Role)}><option>Participant</option><option>BOD</option><option>Admin</option></select></label><button className="button button-primary auth-submit" onClick={() => onSignIn(roleChoice)}>{mode === 'login' ? 'Sign in to workspace' : 'Create demo account'} <ArrowRight size={15} /></button><div className="demo-note"><ShieldCheck size={15} /> Demo access only. No account or backend connection required.</div><div className="auth-switch">{mode === 'login' ? 'New to the club?' : 'Already a member?'} <button onClick={() => onNavigate(mode === 'login' ? 'register' : 'login')}>{mode === 'login' ? 'Create a profile' : 'Sign in'}</button></div></div></div></div> }
+function AuthPage({ mode, busy, feedback, onSignIn, onSignUp, onNavigate }: {
+  mode: 'login' | 'register'
+  busy: boolean
+  feedback: AuthFeedback
+  onSignIn: (email: string, password: string) => Promise<void>
+  onSignUp: (fullName: string, email: string, password: string) => Promise<void>
+  onNavigate: (page: Page) => void
+}) {
+  const [fullName, setFullName] = useState('')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const submit = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (mode === 'register') void onSignUp(fullName, email, password)
+    else void onSignIn(email, password)
+  }
+
+  return <div className="auth-page">
+    <div className="auth-art"><div className="auth-art-inner"><span className="eyebrow"><span className="eyebrow-dot" /> KIST BIM CLUB</span><h2>Make your<br />next thing<br /><em>together.</em></h2><p>A community for curious people and practical ideas.</p><img src="https://images.unsplash.com/photo-1521737711867-e3b97375f902?auto=format&fit=crop&w=1000&q=85" alt="A team working together" /><span className="auth-caption">BIM CLUB · KIST COLLEGE OF MANAGEMENT</span></div></div>
+    <div className="auth-form-wrap">
+      <form className="auth-form" onSubmit={submit}>
+        <div className="eyebrow">{mode === 'login' ? 'MEMBER ACCESS' : 'BECOME A MEMBER'}</div>
+        <h1>{mode === 'login' ? 'Welcome back.' : 'Make yourself at home.'}</h1>
+        <p>{mode === 'login' ? 'Sign in to your BIM Club workspace.' : 'Create a member profile to join events and club activities.'}</p>
+        {feedback && <div className={`auth-feedback auth-feedback-${feedback.kind}`} role={feedback.kind === 'error' ? 'alert' : 'status'}>{feedback.message}</div>}
+        {mode === 'register' && <label className="form-label">Full name<input autoComplete="name" maxLength={120} required value={fullName} onChange={(event) => setFullName(event.target.value)} /></label>}
+        <label className="form-label">Email<input autoComplete="email" type="email" required value={email} onChange={(event) => setEmail(event.target.value)} /></label>
+        <label className="form-label">Password<input autoComplete={mode === 'login' ? 'current-password' : 'new-password'} type="password" minLength={6} required value={password} onChange={(event) => setPassword(event.target.value)} /></label>
+        <button className="button button-primary auth-submit" type="submit" disabled={busy}>{busy ? 'Please wait…' : mode === 'login' ? 'Sign in to workspace' : 'Create account'} {!busy && <ArrowRight size={15} />}</button>
+        <div className="auth-switch">{mode === 'login' ? 'New to the club?' : 'Already a member?'} <button type="button" onClick={() => onNavigate(mode === 'login' ? 'register' : 'login')}>{mode === 'login' ? 'Create a profile' : 'Sign in'}</button></div>
+      </form>
+    </div>
+  </div>
+}
 function Dashboard({ role, currentMember, events, registrations, donations, myRegistrations, onNavigate, onCreate, onEvent }: { role: Role; currentMember: Member; events: ClubEvent[]; registrations: Registration[]; donations: Donation[]; myRegistrations: Registration[]; onNavigate: (page: Page) => void; onCreate: () => void; onEvent: (id: string) => void }) {
   const upcoming = events.filter((event) => event.date >= '2026-10-05' && event.status !== 'Cancelled').sort((a, b) => a.date.localeCompare(b.date))
   const completed = events.filter((event) => event.status === 'Completed').length
@@ -616,7 +836,7 @@ function DonationsPage({ role, donations, onAdd }: { role: Role; donations: Dona
 function UsersPage({ members, setMembers, onAdded }: { members: Member[]; setMembers: (update: (previous: Member[]) => Member[]) => void; onAdded: () => void }) { const [searchValue, setSearchValue] = useState(''); const filtered = members.filter((item) => `${item.name} ${item.email} ${item.role}`.toLowerCase().includes(searchValue.toLowerCase())); return <div className="section-page"><div className="list-toolbar"><SearchField value={searchValue} onChange={setSearchValue} placeholder="Search members" /><span className="result-count">{filtered.length} members</span><button className="button button-primary" onClick={() => { setMembers((items) => [{ id: `member-${Date.now()}`, name: 'New member', email: 'new.member@kist.edu.np', role: 'Participant', joined: '2026-10-05', points: 0 }, ...items]); onAdded() }}><Plus size={15} /> Add member</button></div><div className="panel event-table-panel"><div className="table-scroll"><table className="data-table"><thead><tr><th>MEMBER</th><th>ROLE</th><th>JOINED</th><th>CLUB POINTS</th><th>STATUS</th></tr></thead><tbody>{filtered.map((item) => <tr key={item.id}><td><MemberCell name={item.name} email={item.email} /></td><td><span className={`role-tag role-${item.role.toLowerCase()}`}>{item.role}</span></td><td>{formatDate(item.joined, { month: 'short', day: 'numeric', year: 'numeric' })}</td><td><b>{item.points.toLocaleString()}</b> pts</td><td><StatusBadge status="Confirmed" /></td></tr>)}</tbody></table></div></div></div> }
 function ReportsPage({ events, registrations, donations }: { events: ClubEvent[]; registrations: Registration[]; donations: Donation[] }) { const attended = registrations.filter((item) => item.status === 'Attended').length; const raised = donations.filter((item) => item.status === 'Received').reduce((sum, item) => sum + item.amount, 0); return <div className="section-page"><div className="report-topline"><span>Academic year 2026</span><button className="button button-quiet" onClick={() => window.print()}><ArrowDownToLine size={15} /> Export report</button></div><div className="metric-grid metric-grid-4"><Metric icon={CalendarDays} label="Events hosted" value={String(events.length + 13)} detail="Across this academic year" tone="green" /><Metric icon={Users} label="Registrations" value={String(registrations.length + 120)} detail="All event registrations" tone="blue" /><Metric icon={CheckCircle2} label="Total attendance" value={String(attended + 918)} detail="Checked in at events" tone="peach" /><Metric icon={CircleDollarSign} label="Raised" value={formatMoney(raised)} detail="Confirmed donations" tone="yellow" /></div><div className="content-grid report-charts"><section className="panel chart-panel"><PanelHeading title="Monthly attendance" /><div className="chart-wrap"><AttendanceChart /></div></section><section className="panel report-breakdown"><PanelHeading title="Event breakdown" /><div className="breakdown-list">{['Workshop', 'Design', 'Competition', 'Seminar'].map((label, index) => <div key={label}><span className={`breakdown-dot breakdown-${index}`} /><span>{label}</span><b>{[8, 4, 3, 3][index]}</b><small>events</small></div>)}</div><div className="report-callout"><Sparkles size={15} /><span><b>Engagement is growing</b><small>Attendance is up 18% from last semester.</small></span></div></section></div></div> }
 function LeaderboardPage({ members, currentMember }: { members: Member[]; currentMember: Member }) { return <div className="section-page leaderboard-page"><div className="leaderboard-banner"><div><span className="eyebrow">FALL 2026 · MEMBER RECOGNITION</span><h2>Showing up<br /><em>adds up.</em></h2><p>Points are earned by attending events and contributing to the club community.</p></div><div className="leaderboard-total"><TrendingUp size={20} /><b>{currentMember.points.toLocaleString()}</b><small>your club points</small></div></div><div className="panel leaderboard-table"><div className="panel-heading panel-heading-padded"><h3>Member leaderboard</h3><span className="result-count">Updated today</span></div><div className="leader-list">{[...members].sort((a, b) => b.points - a.points).map((member, index) => <div className={`leader-row ${member.id === currentMember.id ? 'leader-current' : ''}`} key={member.id}><span className={`leader-rank ${index < 3 ? 'leader-rank-top' : ''}`}>{String(index + 1).padStart(2, '0')}</span><Avatar name={member.name} /><span className="leader-name"><b>{member.name}{member.id === currentMember.id && <small>YOU</small>}</b><small>{member.role === 'BOD' ? 'Board of Directors' : 'BIM Club member'}</small></span><span className="leader-points"><b>{member.points.toLocaleString()}</b><small>pts</small></span></div>)}</div></div></div> }
-function ProfilePage({ member, role, onRole, onSignOut }: { member: Member; role: Role; onRole: (role: Role) => void; onSignOut: () => void }) { return <div className="section-page profile-page"><div className="profile-cover"><div className="profile-avatar-wrap"><Avatar name={displayName(role, member)} size /></div><span className="profile-member-since">MEMBER SINCE {formatDate(member.joined, { month: 'long', year: 'numeric' }).toUpperCase()}</span></div><div className="profile-details"><div className="profile-name-row"><div><h2>{displayName(role, member)}</h2><span className="role-tag role-participant">{role} · KIST College</span></div><button className="button button-quiet" onClick={onSignOut}>Sign out <LogOut size={15} /></button></div><div className="profile-info-grid"><div><span>COLLEGE EMAIL</span><b>{member.email}</b></div><div><span>MEMBERSHIP</span><b>BIM Club · Fall 2026</b></div><div><span>CLUB POINTS</span><b>{member.points.toLocaleString()} points</b></div><div><span>ROLE</span><b>{role} account</b></div></div><div className="profile-role-switch"><div><b>Demo role selector</b><small>Switch accounts to preview each workspace.</small></div><div>{(['Admin', 'BOD', 'Participant'] as Role[]).map((item) => <button className={item === role ? 'role-selected' : ''} key={item} onClick={() => onRole(item)}>{item}</button>)}</div></div></div></div> }
+function ProfilePage({ member, role, busy, onSignOut }: { member: Member; role: Role; busy: boolean; onSignOut: () => Promise<void> }) { return <div className="section-page profile-page"><div className="profile-cover"><div className="profile-avatar-wrap"><Avatar name={displayName(role, member)} size /></div><span className="profile-member-since">MEMBER SINCE {formatDate(member.joined, { month: 'long', year: 'numeric' }).toUpperCase()}</span></div><div className="profile-details"><div className="profile-name-row"><div><h2>{displayName(role, member)}</h2><span className="role-tag role-participant">{role} · KIST College</span></div><button className="button button-quiet" disabled={busy} onClick={() => void onSignOut()}>{busy ? 'Signing out…' : 'Sign out'} <LogOut size={15} /></button></div><div className="profile-info-grid"><div><span>COLLEGE EMAIL</span><b>{member.email}</b></div><div><span>MEMBERSHIP</span><b>BIM Club · Fall 2026</b></div><div><span>CLUB POINTS</span><b>{member.points.toLocaleString()} points</b></div><div><span>ROLE</span><b>{role} account</b></div></div></div></div> }
 function EventEditor({ event, form, setForm, onClose, onSave }: { event: ClubEvent | null; form: EventForm; setForm: (form: EventForm) => void; onClose: () => void; onSave: (form: EventForm) => void }) { const update = (key: keyof EventForm, value: string | number) => setForm({ ...form, [key]: value }); return <div className="modal-backdrop" role="presentation" onMouseDown={(click) => { if (click.target === click.currentTarget) onClose() }}><div className="modal event-editor-modal" role="dialog" aria-modal="true" aria-labelledby="event-modal-title"><div className="modal-heading"><div><span className="eyebrow">EVENT MANAGEMENT</span><h2 id="event-modal-title">{event ? 'Edit event' : 'Create an event'}</h2></div><button className="icon-button" aria-label="Close" onClick={onClose}><X size={19} /></button></div><div className="modal-body"><label className="form-label">Event title<input value={form.title} onChange={(e) => update('title', e.target.value)} placeholder="e.g. Product Design Sprint" /></label><label className="form-label">Description<textarea rows={3} value={form.description} onChange={(e) => update('description', e.target.value)} placeholder="What will participants learn or do?" /></label><div className="form-grid-two"><label className="form-label">Date<input type="date" value={form.date} onChange={(e) => update('date', e.target.value)} /></label><label className="form-label">Registration deadline<input type="date" value={form.registrationDeadline} onChange={(e) => update('registrationDeadline', e.target.value)} /></label></div><div className="form-grid-two"><label className="form-label">Start time<input type="time" value={form.startTime} onChange={(e) => update('startTime', e.target.value)} /></label><label className="form-label">End time<input type="time" value={form.endTime} onChange={(e) => update('endTime', e.target.value)} /></label></div><label className="form-label">Location<input value={form.location} onChange={(e) => update('location', e.target.value)} placeholder="Venue or room" /></label><div className="form-grid-two"><label className="form-label">Category<select value={form.category} onChange={(e) => update('category', e.target.value)}><option>Workshop</option><option>Design</option><option>Competition</option><option>Seminar</option><option>Community</option></select></label><label className="form-label">Maximum participants<input type="number" min="1" value={form.maxParticipants} onChange={(e) => update('maxParticipants', Number(e.target.value))} /></label></div><div className="form-grid-two"><label className="form-label">Status<select value={form.status} onChange={(e) => update('status', e.target.value)}>{(['Draft', 'Published', 'Registration Open', 'Registration Closed', 'Completed', 'Cancelled'] as EventStatus[]).map((status) => <option key={status}>{status}</option>)}</select></label><label className="form-label">Image URL<input value={form.image} onChange={(e) => update('image', e.target.value)} placeholder="Optional image URL" /></label></div></div><div className="modal-footer"><button className="button button-quiet" onClick={onClose}>Cancel</button><button className="button button-primary" onClick={() => onSave(form)}>{event ? 'Save changes' : 'Create draft'} <ArrowRight size={15} /></button></div></div></div> }
 function DonationEditor({ onClose, onSave }: { onClose: () => void; onSave: (donation: Donation) => void }) { const [name, setName] = useState(''); const [purpose, setPurpose] = useState('General fund'); const [amount, setAmount] = useState(''); return <div className="modal-backdrop" role="presentation"><div className="modal donation-editor-modal" role="dialog" aria-modal="true" aria-labelledby="donation-modal-title"><div className="modal-heading"><div><span className="eyebrow">CLUB FINANCE</span><h2 id="donation-modal-title">Add donation</h2></div><button className="icon-button" aria-label="Close" onClick={onClose}><X size={19} /></button></div><div className="modal-body"><label className="form-label">Contributor<input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name or organization" /></label><label className="form-label">Purpose<input value={purpose} onChange={(e) => setPurpose(e.target.value)} /></label><label className="form-label">Amount (NPR)<input type="number" min="1" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0" /></label></div><div className="modal-footer"><button className="button button-quiet" onClick={onClose}>Cancel</button><button className="button button-primary" disabled={!name || !amount} onClick={() => onSave({ id: `don-${Date.now()}`, name, purpose, amount: Number(amount), date: '2026-10-05', status: 'Received' })}>Add donation <Check size={15} /></button></div></div></div> }
 function EmptyState({ title, detail, action, onAction }: { title: string; detail: string; action?: string; onAction?: () => void }) { return <div className="empty-state"><span><CalendarDays size={20} /></span><b>{title}</b><p>{detail}</p>{action && onAction && <button className="text-link" onClick={onAction}>{action} <ArrowRight size={14} /></button>}</div> }

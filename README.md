@@ -1,6 +1,6 @@
 # College Club Management System
 
-A responsive React + TypeScript frontend for the BIM Club at KIST College of Management. The app now loads from Supabase when the project environment is configured and falls back to the local mock snapshot when it is not.
+A responsive React + TypeScript frontend for the BIM Club at KIST College of Management. Authentication uses Supabase Auth when the project environment is configured; club data modules retain their existing Supabase repository and local mock fallback.
 
 ## Run locally
 
@@ -28,19 +28,23 @@ VITE_SUPABASE_URL=https://<your-project-ref>.supabase.co
 VITE_SUPABASE_PUBLISHABLE_KEY=<your-supabase-publishable-key>
 ```
 
-Restart the Vite dev server after adding or changing environment values. Without both values, the app continues with the local mock snapshot. Keep `.env.local` out of version control; commit only `.env.example` with placeholders. Vite exposes `VITE_` variables in the browser bundle, so use only the Supabase publishable key here, never a secret or service-role key. Share project configuration through an approved private channel, not by committing the populated file. The application now supports a Supabase-backed repository adapter and falls back gracefully when the environment is not configured. Apply the migration files in Supabase before depending on live data.
+Restart the Vite dev server after adding or changing environment values. Without both values, authentication is unavailable and the app reports that Supabase is not configured; club data modules can still use the local mock snapshot. Keep `.env.local` out of version control; commit only `.env.example` with placeholders. Vite exposes `VITE_` variables in the browser bundle, so use only the Supabase publishable key here, never a secret or service-role key. Share project configuration through an approved private channel, not by committing the populated file. Apply the migration files in Supabase before using authenticated profile access or depending on live data.
 
 Run `npm run test:supabase` to check project reachability. The temporary test sends an HTTP request to Supabase Auth's health endpoint and does not read or write database tables. A successful result confirms the endpoint responded; a 401/403 means the project is reachable but rejected the key, a 404 suggests the endpoint or project URL is incorrect, and a network or timeout error means the host could not be reached.
 
-## Demo roles
+## Authentication
 
-Choose **Member sign in** and select a demo role:
+Member registration and sign-in use Supabase email/password authentication. Registration requires a full name, email, and password; the client sends only the full name as user metadata. The existing Auth trigger in `001_initial_schema.sql` creates the associated `public.profiles` row with the `participant` role. No role is accepted from the signup form or user-editable metadata. The client loads the authenticated user's profile under the existing profile RLS policy and uses that database role to select the workspace. Profile role updates are not permitted through the client API; assign initial administrators only through a trusted administrative path.
+
+Enable the Email provider in Supabase Auth. The Supabase client persists and restores sessions and handles Auth callback URLs. If email confirmation is enabled in Supabase, a new user must follow the confirmation link before signing in; configure the Supabase Site URL and redirect URL allowlist for the local Vite origin and deployed app origin.
+
+## Workspace access and demo modules
 
 - **Admin:** members, events, attendance records, donations, files, reports, and activity log.
 - **BOD:** event operations, registrations, QR-based attendance verification, attendance records, and files.
 - **Participant:** event discovery and registration, QR check-in status, attendance history, contributions, notifications, and leaderboard.
 
-The demo sign-in does not validate credentials. Event registration, event edits, member changes, attendance verification, file uploads, notifications, and donations update local React state only. Donations use a mock contribution flow with NPR amounts; no real payment processing is connected.
+Workspace roles come from `public.profiles.role`; there is no client-side role selector. Signup always creates participant access. Several non-authentication modules still use local React state and mock records: event edits, attendance verification, file metadata uploads, notifications, activity, member changes, and donation flows. Donations do not process payments.
 
 ## Current modules
 
