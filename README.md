@@ -13,14 +13,22 @@ Open the local URL printed by Vite. Use `npm run build` to create a production b
 
 ## Supabase configuration
 
-The official `@supabase/supabase-js` client is available from `src/lib/supabase.ts`. Configure the Vite environment before using it by creating a `.env.local` file in the project root:
+The official `@supabase/supabase-js` client is available from `src/lib/supabase.ts`. `.env.local` is intentionally ignored by Git so project credentials are not copied to every clone. It will therefore not appear in a partner's checkout.
+
+After cloning the repository, each developer should create their own local environment file from the tracked template:
+
+```powershell
+Copy-Item .env.example .env.local
+```
+
+Then replace the placeholders in `.env.local` with the Supabase project URL and publishable key supplied by the project owner (Supabase Dashboard → **Project Settings → API**):
 
 ```env
 VITE_SUPABASE_URL=https://<your-project-ref>.supabase.co
 VITE_SUPABASE_PUBLISHABLE_KEY=<your-supabase-publishable-key>
 ```
 
-For this project, the project reference is `okphwkwdxfvttprjylux`. Keep `.env.local` out of version control; it is ignored by Git. Vite exposes `VITE_` variables in the browser bundle, so use only a Supabase publishable key here, never a service-role key. The current app still uses mock data and has no Supabase queries or authentication wiring. An initial schema migration is prepared but has not been applied.
+Restart the Vite dev server after adding or changing environment values. Without both values, the Supabase client reports a missing configuration error. Keep `.env.local` out of version control; commit only `.env.example` with placeholders. Vite exposes `VITE_` variables in the browser bundle, so use only the Supabase publishable key here, never a secret or service-role key. Share project configuration through an approved private channel, not by committing the populated file. The current app still uses mock data and has no Supabase queries or authentication wiring. An initial schema migration is prepared but has not been applied.
 
 Run `npm run test:supabase` to check project reachability. The temporary test sends an HTTP request to Supabase Auth's health endpoint and does not read or write database tables. A successful result confirms the endpoint responded; a 401/403 means the project is reachable but rejected the key, a 404 suggests the endpoint or project URL is incorrect, and a network or timeout error means the host could not be reached.
 
