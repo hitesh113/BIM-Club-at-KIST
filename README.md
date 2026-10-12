@@ -44,7 +44,7 @@ Enable the Email provider in Supabase Auth. The Supabase client persists and res
 - **BOD:** event operations, registrations, QR-based attendance verification, attendance records, and files.
 - **Participant:** event discovery and registration, QR check-in status, attendance history, contributions, notifications, and leaderboard.
 
-Workspace roles come from `public.profiles.role`; there is no client-side role selector. Signup always creates participant access. Event registration/cancellation and staff attendance check-in use Supabase RPCs when configured; the local demo keeps those changes in React state. Several other modules still use local React state and mock records: event edits, file metadata uploads, notifications, activity, member changes, and donation flows. Donations do not process payments.
+Workspace roles come from `public.profiles.role`; there is no client-side role selector. Signup always creates participant access. Event listing, creation, edits, status changes, event registration/cancellation, and staff attendance check-in use Supabase when configured; the local demo uses mock records and in-memory state. Several other modules still use local React state and mock records: file metadata uploads, notifications, activity, member changes, and donation flows. Donations do not process payments.
 
 ## Current modules
 
@@ -56,7 +56,7 @@ Workspace roles come from `public.profiles.role`; there is no client-side role s
 
 ## Data boundary
 
-Domain types are in `src/types.ts`, sample records in `src/mockData.ts`, and the current `ClubRepository` contract/mock implementation in `src/services/clubRepository.ts`. The future database boundary is organized around:
+Domain types are in `src/types.ts`, sample records in `src/mockData.ts`, and the `ClubRepository` implementations in `src/services/clubRepository.ts`. The database boundary is organized around:
 
 - `profiles/users`
 - `events`
@@ -73,8 +73,8 @@ The repository adapter uses Supabase when configured and mock data when it is no
 
 The initial `profiles` and `events` schema is in `supabase/migrations/001_initial_schema.sql`. To apply it manually, first confirm that the Supabase Dashboard is open for the intended project and review the migration. In **SQL Editor**, create a new query, paste the full migration file, and run it. Then verify that `profiles` and `events` exist and that RLS is enabled for both in **Table Editor**. This migration does not seed mock club records or connect the frontend to the database.
 
-New Auth users receive a linked profile with the `participant` role. Profile role changes are not permitted through the client API. After the intended administrator has signed up and all three migrations have been applied, replace the email placeholder in `supabase/queries/assign_initial_admin.sql` and run it in the Supabase SQL Editor. Confirm that exactly one row is returned. Never expose a secret or service-role key in the browser.
+New Auth users receive a linked profile with the `participant` role. Profile role changes are not permitted through the client API. After the intended administrator has signed up and both migrations have been applied, replace the email placeholder in `supabase/queries/assign_initial_admin.sql` and run it in the Supabase SQL Editor. Confirm that exactly one row is returned. Never expose a secret or service-role key in the browser.
 
 The additive `supabase/migrations/002_complete_club_schema.sql` migration extends the initial schema with registrations, attendance, member files and private Storage policies, donations, notifications and per-user read state, activity logs, board memberships, and point transactions. It does not replace the initial tables or seed the current mock data. The `003_registered_attendance.sql` migration adds an atomic staff check-in operation that requires an active event registration, records attendance, and updates the registration status together. Before applying the migrations, verify whether `001_initial_schema.sql` has already been run in the target project: if not, review and apply `001` first, then `002` and `003`; if it has, apply `002` and `003`. Existing event rows are preserved, and schedule/capacity/category extension fields remain nullable so no values are fabricated for existing rows.
 
-Apply the migration files in order from the Supabase SQL Editor. Do not run the standalone administrator assignment query until after all three migrations and the administrator's signup.
+Apply the migration files in order from the Supabase SQL Editor. Do not run the standalone administrator assignment query until after both migrations and the administrator's signup.

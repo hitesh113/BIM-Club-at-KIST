@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Activity, ArrowDownToLine, ArrowRight, ArrowUpRight, Bell, CalendarDays,
   Check, CheckCircle2, ChevronDown, ChevronLeft, Clock, CreditCard, FileText,
@@ -86,6 +86,8 @@ const todayDate = () => {
 function App() {
   const [snapshot, setSnapshot] = useState<ClubSnapshot>(() => mockClubRepository.loadSnapshot() as ClubSnapshot)
   const [page, setPage] = useState<Page>('home')
+  const pageHistory = useRef<Page[]>([])
+  const [canGoBack, setCanGoBack] = useState(false)
   const [role, setRole] = useState<Role | null>(null)
   const [authUser, setAuthUser] = useState<User | null>(null)
   const [authProfile, setAuthProfile] = useState<AuthProfile | null>(null)
@@ -93,7 +95,12 @@ function App() {
   const [authBusy, setAuthBusy] = useState(false)
   const [authFeedback, setAuthFeedback] = useState<AuthFeedback>(null)
   const profileRequest = useRef(0)
+  const eventsRequest = useRef(0)
   const [events, setEvents] = useState(snapshot.events)
+  const [eventsLoading, setEventsLoading] = useState(Boolean(supabase))
+  const [eventsError, setEventsError] = useState('')
+  const [eventMutationError, setEventMutationError] = useState('')
+  const [eventSaving, setEventSaving] = useState(false)
   const [registrations, setRegistrations] = useState(snapshot.registrations)
   const [donations, setDonations] = useState(snapshot.donations)
   const [members, setMembers] = useState(snapshot.members)
@@ -113,7 +120,36 @@ function App() {
     setNotifications(nextSnapshot.notifications)
     setActivityLog(nextSnapshot.activityLog)
   }
-  const refreshSnapshot = async () => applySnapshot(await clubRepository.loadSnapshot())
+  const refreshSnapshot = async () => {
+    const nextSnapshot = await clubRepository.loadSnapshot()
+    eventsRequest.current += 1
+    applySnapshot(nextSnapshot)
+    setEventsError('')
+    setEventsLoading(false)
+  }
+
+  const loadEvents = useCallback(async () => {
+    const requestId = ++eventsRequest.current
+    try {
+      const nextEvents = await clubRepository.loadEvents()
+      if (requestId === eventsRequest.current) {
+        setEvents(nextEvents)
+        setEventsError('')
+      }
+    } catch (error) {
+      if (requestId === eventsRequest.current) {
+        setEvents([])
+        setEventsError(error instanceof Error ? error.message : 'Unable to load events.')
+      }
+    } finally {
+      if (requestId === eventsRequest.current) setEventsLoading(false)
+    }
+  }, [])
+  const retryEvents = () => {
+    setEventsLoading(true)
+    setEventsError('')
+    void loadEvents()
+  }
 
   useEffect(() => {
     if (supabase) return
@@ -130,6 +166,11 @@ function App() {
       isMounted = false
     }
   }, [])
+
+  useEffect(() => {
+    if (!supabase) return
+    void Promise.resolve().then(loadEvents)
+  }, [loadEvents])
   const [selectedId, setSelectedId] = useState('evt-101')
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState('All categories')
@@ -255,16 +296,31 @@ function App() {
   const addNotification = (item: Omit<Notification, 'id' | 'read'>) => setNotifications((items) => [{ ...item, id: `note-${Date.now()}`, read: false }, ...items])
   const markNotificationsRead = () => setNotifications((items) => items.map((item) => item.recipient === 'All' || item.recipient === role ? { ...item, read: true } : item))
   const navigate = (target: Page) => {
+    let nextPage = target
     if (privatePages.has(target) && (!authUser || !role)) {
       if (authLoading) {
-        setPage(target)
+        nextPage = target
       } else {
-        setPage('login')
+        nextPage = 'login'
         setAuthFeedback({ kind: 'error', message: 'Please sign in to access your BIM Club workspace.' })
       }
-      return
     }
-    setPage(target)
+    if (nextPage !== page) {
+      pageHistory.current.push(page)
+      setCanGoBack(true)
+      setPage(nextPage)
+    }
+    setMenuOpen(false)
+    setNotificationOpen(false)
+    setProfileOpen(false)
+  }
+  const goBack = () => {
+    let previousPage = pageHistory.current.pop()
+    while (previousPage && privatePages.has(previousPage) && (!authUser || !role)) {
+      previousPage = pageHistory.current.pop()
+    }
+    setCanGoBack(pageHistory.current.length > 0)
+    setPage(previousPage ?? (role ? 'dashboard' : 'home'))
     setMenuOpen(false)
     setNotificationOpen(false)
     setProfileOpen(false)
@@ -424,25 +480,57 @@ function App() {
     navigate('event-detail')
   }
   const startEventEditor = (event?: ClubEvent) => {
+    setEventMutationError('')
     setEditingEvent(event ?? null)
     setEventForm(event ? { ...event } : blankEvent)
     setEventModal(true)
   }
-  const saveEvent = (form: EventForm) => {
+  const saveEvent = async (form: EventForm) => {
     if (!form.title.trim()) return notify('Add an event title before saving')
-    if (editingEvent) {
-      setEvents((items) => items.map((item) => item.id === editingEvent.id ? { ...form, id: item.id, image: form.image || item.image } : item))
-      notify('Event changes saved')
-    } else {
-      setEvents((items) => [{ ...form, id: `evt-${Date.now()}`, image: form.image || snapshot.events[0].image }, ...items])
-      notify('Event created as a draft')
+    setEventSaving(true)
+    setEventMutationError('')
+    try {
+      if (editingEvent) {
+        const savedEvent = await clubRepository.updateEvent(editingEvent.id, {
+          ...form,
+          image: form.image || editingEvent.image,
+        })
+        setEvents((items) => items.map((item) => item.id === savedEvent.id ? savedEvent : item))
+        notify('Event changes saved')
+      } else {
+        const createdEvent = await clubRepository.createEvent({
+          ...form,
+          image: form.image || snapshot.events[0]?.image || '',
+        })
+        setEvents((items) => [createdEvent, ...items])
+        notify('Event created')
+      }
+      setEventModal(false)
+      setEditingEvent(null)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not save the event.'
+      setEventMutationError(message)
+      notify(`Event was not saved: ${message}`)
+    } finally {
+      setEventSaving(false)
     }
-    setEventModal(false)
-    setEditingEvent(null)
   }
-  const setEventStatus = (id: string, status: EventStatus) => {
-    setEvents((items) => items.map((event) => event.id === id ? { ...event, status } : event))
-    notify(`Event marked ${status.toLowerCase()}`)
+  const setEventStatus = async (id: string, status: EventStatus) => {
+    const event = events.find((item) => item.id === id)
+    if (!event) {
+      notify('The event could not be found. Refresh the events list and try again.')
+      return
+    }
+    try {
+      const savedEvent = await clubRepository.updateEventStatus(event, status)
+      setEvents((items) => items.map((item) => item.id === savedEvent.id ? savedEvent : item))
+      setEventMutationError('')
+      notify(`Event marked ${status.toLowerCase()}`)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not update the event status.'
+      setEventMutationError(message)
+      notify(`Event status was not saved: ${message}`)
+    }
   }
   const register = async (event: ClubEvent) => {
     if (!authUser) {
@@ -506,12 +594,12 @@ function App() {
         <div className="sidebar-bottom"><div className="semester-card"><span className="semester-icon"><Building2 size={15} /></span><div><b>Fall semester</b><small>2026 · KIST College</small></div><ChevronDown size={14} /></div><div className="sidebar-user"><Avatar name={currentMember.name} /><div><b>{currentMember.name}</b><small>{role} account</small></div><button className="icon-button" aria-label="Open profile" onClick={() => navigate('profile')}><Settings2 size={16} /></button></div></div>
       </aside>
       <div className="main-column">
-        <header className="app-header"><button className="icon-button mobile-menu-button" aria-label="Open navigation" onClick={() => setMenuOpen(true)}><Menu size={20} /></button><div className="breadcrumb"><span>Workspace</span><ChevronLeft size={14} /><b>{pageTitles[page]}</b></div><div className="header-actions"><button className="icon-button header-search" aria-label="Search events" onClick={() => { navigate(role === 'Participant' ? 'events' : 'manage-events'); setSearch('') }}><Search size={18} /></button><div className="popover-anchor"><button className="icon-button notification-button" aria-label="Notifications" onClick={() => setNotificationOpen(!notificationOpen)}><Bell size={18} /><i /></button>{notificationOpen && <div className="popover notification-popover"><div className="popover-title">Notifications <span>2 new</span></div><p><b>Workshop registrations are open</b><small>Web Development Workshop · 2h ago</small></p><p><b>New donation received</b><small>NPR 1,500 from Aarav · Yesterday</small></p></div>}</div><div className="popover-anchor"><button className="header-profile" onClick={() => setProfileOpen(!profileOpen)}><Avatar name={currentMember.name} /><span>{shortName(role, currentMember)}</span><ChevronDown size={14} /></button>{profileOpen && <div className="popover profile-popover"><div className="popover-title">{role} account</div><button className="signout-option" onClick={() => void signOut()}><LogOut size={14} /> Sign out</button></div>}</div></div></header>
+        <header className="app-header"><button className="icon-button mobile-menu-button" aria-label="Open navigation" onClick={() => setMenuOpen(true)}><Menu size={20} /></button><div className="breadcrumb"><button className="icon-button back-button" aria-label="Go back" title="Go back" disabled={!canGoBack} onClick={goBack}><ChevronLeft size={16} /></button><span>Workspace</span><ChevronLeft size={14} /><b>{pageTitles[page]}</b></div><div className="header-actions"><button className="icon-button header-search" aria-label="Search events" onClick={() => { navigate(role === 'Participant' ? 'events' : 'manage-events'); setSearch('') }}><Search size={18} /></button><div className="popover-anchor"><button className="icon-button notification-button" aria-label="Notifications" onClick={() => setNotificationOpen(!notificationOpen)}><Bell size={18} /><i /></button>{notificationOpen && <div className="popover notification-popover"><div className="popover-title">Notifications <span>2 new</span></div><p><b>Workshop registrations are open</b><small>Web Development Workshop · 2h ago</small></p><p><b>New donation received</b><small>NPR 1,500 from Aarav · Yesterday</small></p></div>}</div><div className="popover-anchor"><button className="header-profile" onClick={() => setProfileOpen(!profileOpen)}><Avatar name={currentMember.name} /><span>{shortName(role, currentMember)}</span><ChevronDown size={14} /></button>{profileOpen && <div className="popover profile-popover"><div className="popover-title">{role} account</div><button className="signout-option" onClick={() => void signOut()}><LogOut size={14} /> Sign out</button></div>}</div></div></header>
         <main className="page-content"><PageHeading page={page} role={role} onCreate={() => startEventEditor()} onNavigate={navigate} />{renderContent()}</main>
       </div>
     </>}
-    {publicMode && <main className="public-main">{renderContent()}</main>}
-    {eventModal && <EventEditor event={editingEvent} form={eventForm} setForm={setEventForm} onClose={() => setEventModal(false)} onSave={saveEvent} />}
+    {publicMode && <main className="public-main"><div className="public-back-row"><button className="icon-button back-button" aria-label="Go back" title="Go back" disabled={!canGoBack} onClick={goBack}><ChevronLeft size={16} /></button></div>{renderContent()}</main>}
+    {eventModal && <EventEditor event={editingEvent} form={eventForm} setForm={setEventForm} saving={eventSaving} error={eventMutationError} onClose={() => setEventModal(false)} onSave={saveEvent} />}
     {donationModal && <DonationEditor onClose={() => setDonationModal(false)} onSave={(donation) => { setDonations((items) => [donation, ...items]); addActivity(currentMember.name, `${role} recorded a contribution of ${formatMoney(donation.amount)}`); addNotification({ title: 'Donation successful', detail: `${formatMoney(donation.amount)} contribution recorded.`, timestamp: 'Just now', recipient: role === 'Participant' ? 'Participant' : 'All' }); setDonationModal(false); notify('Contribution recorded in the demo ledger') }} />}
     {scannerOpen && <AttendanceScanner
       events={events}
@@ -553,14 +641,14 @@ function App() {
     }
     if (!role) {
       if (page === 'about') return <AboutPage events={events} members={members} registrations={registrations} onNavigate={navigate} />
-      if (page === 'events') return <><EventsPage events={filteredEvents} search={search} setSearch={setSearch} category={category} setCategory={setCategory} statusFilter={statusFilter} setStatusFilter={setStatusFilter} onEvent={openEvent} /><PublicFooter onNavigate={navigate} /></>
+      if (page === 'events') return <><EventsPage events={filteredEvents} loading={eventsLoading} error={eventsError} mutationError={eventMutationError} onRetry={retryEvents} search={search} setSearch={setSearch} category={category} setCategory={setCategory} statusFilter={statusFilter} setStatusFilter={setStatusFilter} onEvent={openEvent} /><PublicFooter onNavigate={navigate} /></>
       if (page === 'event-detail') return <EventDetails event={selectedEvent} registrations={registrations} onRegister={() => navigate('login')} />
       if (page === 'login' || page === 'register') return <AuthPage mode={page} busy={authBusy} feedback={authFeedback} onSignIn={signIn} onSignUp={signUp} onNavigate={navigate} />
       return <LandingPage events={events} onNavigate={navigate} onEvent={openEvent} />
     }
     const countFor = (id: string) => registrations.filter((item) => item.eventId === id && item.status !== 'Cancelled').length
     if (page === 'dashboard') return <Dashboard role={role} currentMember={currentMember} events={events} registrations={registrations} donations={donations} myRegistrations={myRegistrations} onNavigate={navigate} onCreate={() => startEventEditor()} onEvent={openEvent} />
-    if (page === 'events') return <EventsPage events={filteredEvents} search={search} setSearch={setSearch} category={category} setCategory={setCategory} statusFilter={statusFilter} setStatusFilter={setStatusFilter} onEvent={openEvent} />
+    if (page === 'events') return <EventsPage events={filteredEvents} loading={eventsLoading} error={eventsError} mutationError={eventMutationError} onRetry={retryEvents} search={search} setSearch={setSearch} category={category} setCategory={setCategory} statusFilter={statusFilter} setStatusFilter={setStatusFilter} onEvent={openEvent} />
     if (page === 'event-detail') {
       const registration = myRegistrations.find((item) => item.eventId === selectedEvent?.id)
       return <EventDetails
@@ -572,7 +660,7 @@ function App() {
         onCancel={registration?.status === 'Confirmed' ? () => void cancelRegistration(registration.id) : undefined}
       />
     }
-    if (page === 'manage-events') return <ManageEvents events={filteredEvents} countFor={countFor} search={search} setSearch={setSearch} category={category} setCategory={setCategory} statusFilter={statusFilter} setStatusFilter={setStatusFilter} onEdit={startEventEditor} onCreate={() => startEventEditor()} onEvent={openEvent} onStatus={setEventStatus} />
+    if (page === 'manage-events') return <ManageEvents events={filteredEvents} loading={eventsLoading} error={eventsError} mutationError={eventMutationError} onRetry={retryEvents} countFor={countFor} search={search} setSearch={setSearch} category={category} setCategory={setCategory} statusFilter={statusFilter} setStatusFilter={setStatusFilter} onEdit={startEventEditor} onCreate={() => startEventEditor()} onEvent={openEvent} onStatus={setEventStatus} />
     if (page === 'registrations') return <RegistrationsPage events={events} registrations={registrations} query={query} setQuery={setQuery} onAttendance={(id) => { setRegistrations((items) => items.map((item) => item.id === id ? { ...item, status: 'Attended' } : item)); notify('Attendance recorded') }} />
     if (page === 'attendance') return <AttendancePage role={role} currentMember={currentMember} registrations={registrations} attendance={attendance} events={events} onScan={() => setScannerOpen(true)} />
     if (page === 'files') return <FilesPage role={role} files={files} onUpload={(file) => { setFiles((items) => [file, ...items]); addActivity(role === 'BOD' ? 'Sujan Karki' : 'Maya Adhikari', `${role} uploaded ${file.name}`); notify('File added to club files') }} onDownload={() => notify('Download prepared for this demo file')} />
@@ -866,7 +954,7 @@ function AboutPage({ events, members, registrations, onNavigate }: { events: Clu
     <PublicFooter onNavigate={onNavigate} />
   </div>
 }
-function EventsPage({ events, search, setSearch, category, setCategory, statusFilter, setStatusFilter, onEvent }: { events: ClubEvent[]; search: string; setSearch: (value: string) => void; category: string; setCategory: (value: string) => void; statusFilter: string; setStatusFilter: (value: string) => void; onEvent: (id: string) => void }) {
+function EventsPage({ events, loading, error, mutationError, onRetry, search, setSearch, category, setCategory, statusFilter, setStatusFilter, onEvent }: { events: ClubEvent[]; loading: boolean; error: string; mutationError: string; onRetry: () => void; search: string; setSearch: (value: string) => void; category: string; setCategory: (value: string) => void; statusFilter: string; setStatusFilter: (value: string) => void; onEvent: (id: string) => void }) {
   return <div className="events-page">
     <div className="events-content">
       <div className="events-intro">
@@ -877,11 +965,12 @@ function EventsPage({ events, search, setSearch, category, setCategory, statusFi
       <div className="filter-bar">
         <label className="search-field"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search events" /></label>
         <label className="select-field"><Filter size={15} /><select value={category} onChange={(event) => setCategory(event.target.value)}><option>All categories</option><option>Workshop</option><option>Design</option><option>Competition</option><option>Seminar</option><option>Community</option></select><ChevronDown size={14} /></label>
-        <label className="select-field"><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option>All statuses</option><option>Registration Open</option><option>Published</option><option>Completed</option></select><ChevronDown size={14} /></label>
+        <label className="select-field"><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option>All statuses</option><option>Draft</option><option>Published</option><option>Registration Open</option><option>Registration Closed</option><option>Completed</option><option>Cancelled</option></select><ChevronDown size={14} /></label>
         <span className="result-count">{events.length} events</span>
       </div>
-      <div className="public-event-grid events-grid-list">{events.map((event, index) => <PublicEventCard key={event.id} event={event} index={index} onClick={() => onEvent(event.id)} />)}</div>
-      {events.length === 0 && <EmptyState title="No events match those filters" detail="Try changing your search or category." />}
+      <EventDataState loading={loading} error={error} mutationError={mutationError} onRetry={onRetry} />
+      {!loading && !error && events.length > 0 && <div className="public-event-grid events-grid-list">{events.map((event, index) => <PublicEventCard key={event.id} event={event} index={index} onClick={() => onEvent(event.id)} />)}</div>}
+      {!loading && !error && events.length === 0 && <EmptyState title="No events match those filters" detail="Try changing your search or category, or check back later." />}
     </div>
   </div>
 }
@@ -1039,8 +1128,23 @@ function PanelHeading({ title, action, onAction }: { title: string; action?: str
 function CompactEvent({ event, onClick }: { event: ClubEvent; onClick: () => void }) { const date = new Date(`${event.date}T12:00:00`); return <button className="compact-event" onClick={onClick}><span className="compact-date"><b>{date.getDate()}</b><small>{date.toLocaleDateString('en-US', { month: 'short' }).toUpperCase()}</small></span><span className="compact-event-body"><b>{event.title}</b><small><Clock size={12} /> {event.startTime} <span>·</span> <MapPin size={12} /> {event.location}</small></span><StatusBadge status={event.status} /></button> }
 function ActivityItem({ icon: Icon, title, detail, tone }: { icon: typeof Activity; title: string; detail: string; tone: string }) { return <div className="activity-item"><span className={`activity-icon tone-${tone}`}><Icon size={15} /></span><div><b>{title}</b><small>{detail}</small></div></div> }
 function StatusBadge({ status }: { status: EventStatus | Registration['status'] | Donation['status'] | AttendanceRecord['status'] | `${number}%` }) { return <span className={`status-badge badge-${String(status).toLowerCase().replaceAll(' ', '-')}`}><i />{status}</span> }
-function ManageEvents({ events, countFor, search, setSearch, category, setCategory, statusFilter, setStatusFilter, onEdit, onCreate, onEvent, onStatus }: { events: ClubEvent[]; countFor: (id: string) => number; search: string; setSearch: (value: string) => void; category: string; setCategory: (value: string) => void; statusFilter: string; setStatusFilter: (value: string) => void; onEdit: (event: ClubEvent) => void; onCreate: () => void; onEvent: (id: string) => void; onStatus: (id: string, status: EventStatus) => void }) {
-  return <div className="section-page"><div className="list-toolbar"><SearchField value={search} onChange={setSearch} placeholder="Search events" /><SelectField value={category} onChange={setCategory} options={['All categories', 'Workshop', 'Design', 'Competition', 'Seminar', 'Community']} icon={<Filter size={15} />} /><SelectField value={statusFilter} onChange={setStatusFilter} options={['All statuses', 'Draft', 'Published', 'Registration Open', 'Registration Closed', 'Completed', 'Cancelled']} /><span className="result-count">{events.length} events</span><button className="button button-primary toolbar-create" onClick={onCreate}><Plus size={15} /> New event</button></div><div className="panel event-table-panel"><div className="table-scroll"><table className="data-table"><thead><tr><th>EVENT</th><th>DATE & LOCATION</th><th>REGISTRATIONS</th><th>STATUS</th><th /></tr></thead><tbody>{events.map((event) => { const count = countFor(event.id); return <tr key={event.id}><td><button className="event-table-name" onClick={() => onEvent(event.id)}><img src={event.image} alt="" /><span><b>{event.title}</b><small>{event.category}</small></span></button></td><td><b>{formatDate(event.date, { month: 'short', day: 'numeric', year: 'numeric' })}</b><small className="table-secondary"><MapPin size={12} /> {event.location}</small></td><td><div className="registration-progress"><span>{count} / {event.maxParticipants}</span><i><b style={{ width: `${Math.min(100, count / event.maxParticipants * 100)}%` }} /></i></div></td><td><StatusBadge status={event.status} /></td><td><div className="table-actions"><button className="icon-button" aria-label={`Edit ${event.title}`} onClick={() => onEdit(event)}><Settings2 size={15} /></button><button className="icon-button" aria-label={`Toggle registration for ${event.title}`} onClick={() => onStatus(event.id, event.status === 'Registration Open' ? 'Registration Closed' : 'Registration Open')}><ArrowUpRight size={15} /></button></div></td></tr> })}</tbody></table></div>{events.length === 0 && <EmptyState title="No events found" detail="Try another search or create a new event." action="Create event" onAction={onCreate} />}</div></div>
+function ManageEvents({ events, loading, error, mutationError, onRetry, countFor, search, setSearch, category, setCategory, statusFilter, setStatusFilter, onEdit, onCreate, onEvent, onStatus }: { events: ClubEvent[]; loading: boolean; error: string; mutationError: string; onRetry: () => void; countFor: (id: string) => number; search: string; setSearch: (value: string) => void; category: string; setCategory: (value: string) => void; statusFilter: string; setStatusFilter: (value: string) => void; onEdit: (event: ClubEvent) => void; onCreate: () => void; onEvent: (id: string) => void; onStatus: (id: string, status: EventStatus) => Promise<void> }) {
+  return <div className="section-page">
+    <div className="list-toolbar"><SearchField value={search} onChange={setSearch} placeholder="Search events" /><SelectField value={category} onChange={setCategory} options={['All categories', 'Workshop', 'Design', 'Competition', 'Seminar', 'Community']} icon={<Filter size={15} />} /><SelectField value={statusFilter} onChange={setStatusFilter} options={['All statuses', 'Draft', 'Published', 'Registration Open', 'Registration Closed', 'Completed', 'Cancelled']} /><span className="result-count">{events.length} events</span><button className="button button-primary toolbar-create" onClick={onCreate}><Plus size={15} /> New event</button></div>
+    <EventDataState loading={loading} error={error} mutationError={mutationError} onRetry={onRetry} />
+    {!loading && !error && <div className="panel event-table-panel">
+      <div className="table-scroll"><table className="data-table"><thead><tr><th>EVENT</th><th>DATE & LOCATION</th><th>REGISTRATIONS</th><th>STATUS</th><th /></tr></thead><tbody>{events.map((event) => { const count = countFor(event.id); return <tr key={event.id}><td><button className="event-table-name" onClick={() => onEvent(event.id)}><img src={event.image} alt="" /><span><b>{event.title}</b><small>{event.category}</small></span></button></td><td><b>{formatDate(event.date, { month: 'short', day: 'numeric', year: 'numeric' })}</b><small className="table-secondary"><MapPin size={12} /> {event.location}</small></td><td><div className="registration-progress"><span>{count} / {event.maxParticipants}</span><i><b style={{ width: `${Math.min(100, count / event.maxParticipants * 100)}%` }} /></i></div></td><td><StatusBadge status={event.status} /></td><td><div className="table-actions"><button className="icon-button" aria-label={`Edit ${event.title}`} onClick={() => onEdit(event)}><Settings2 size={15} /></button><button className="icon-button" aria-label={`Toggle registration for ${event.title}`} onClick={() => void onStatus(event.id, event.status === 'Registration Open' ? 'Registration Closed' : 'Registration Open')}><ArrowUpRight size={15} /></button></div></td></tr> })}</tbody></table></div>
+      {events.length === 0 && <EmptyState title="No events found" detail="Try another search or create a new event." action="Create event" onAction={onCreate} />}
+    </div>}
+  </div>
+}
+
+function EventDataState({ loading, error, mutationError, onRetry }: { loading: boolean; error: string; mutationError: string; onRetry: () => void }) {
+  return <>
+    {loading && <div className="event-data-state" role="status">Loading events…</div>}
+    {error && <div className="event-data-error" role="alert"><span><b>Events could not be loaded.</b><small>{error}</small></span><button className="button button-quiet button-xs" onClick={onRetry}>Retry</button></div>}
+    {mutationError && <div className="event-data-error" role="alert"><span><b>Event changes were not saved.</b><small>{mutationError}</small></span></div>}
+  </>
 }
 function SearchField({ value, onChange, placeholder }: { value: string; onChange: (value: string) => void; placeholder: string }) { return <label className="search-field"><Search size={16} /><input value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} /></label> }
 function SelectField({ value, onChange, options, icon }: { value: string; onChange: (value: string) => void; options: string[]; icon?: React.ReactNode }) { return <label className="select-field">{icon}<select value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => <option key={option}>{option}</option>)}</select><ChevronDown size={14} /></label> }
@@ -1135,7 +1239,25 @@ function UsersPage({ members, setMembers, onAdded }: { members: Member[]; setMem
 function ReportsPage({ events, registrations, donations }: { events: ClubEvent[]; registrations: Registration[]; donations: Donation[] }) { const attended = registrations.filter((item) => item.status === 'Attended').length; const raised = donations.filter((item) => item.status === 'Received').reduce((sum, item) => sum + item.amount, 0); return <div className="section-page"><div className="report-topline"><span>Academic year 2026</span><button className="button button-quiet" onClick={() => window.print()}><ArrowDownToLine size={15} /> Export report</button></div><div className="metric-grid metric-grid-4"><Metric icon={CalendarDays} label="Events hosted" value={String(events.length + 13)} detail="Across this academic year" tone="green" /><Metric icon={Users} label="Registrations" value={String(registrations.length + 120)} detail="All event registrations" tone="blue" /><Metric icon={CheckCircle2} label="Total attendance" value={String(attended + 918)} detail="Checked in at events" tone="peach" /><Metric icon={CircleDollarSign} label="Raised" value={formatMoney(raised)} detail="Confirmed donations" tone="yellow" /></div><div className="content-grid report-charts"><section className="panel chart-panel"><PanelHeading title="Monthly attendance" /><div className="chart-wrap"><AttendanceChart /></div></section><section className="panel report-breakdown"><PanelHeading title="Event breakdown" /><div className="breakdown-list">{['Workshop', 'Design', 'Competition', 'Seminar'].map((label, index) => <div key={label}><span className={`breakdown-dot breakdown-${index}`} /><span>{label}</span><b>{[8, 4, 3, 3][index]}</b><small>events</small></div>)}</div><div className="report-callout"><Sparkles size={15} /><span><b>Engagement is growing</b><small>Attendance is up 18% from last semester.</small></span></div></section></div></div> }
 function LeaderboardPage({ members, currentMember }: { members: Member[]; currentMember: Member }) { return <div className="section-page leaderboard-page"><div className="leaderboard-banner"><div><span className="eyebrow">FALL 2026 · MEMBER RECOGNITION</span><h2>Showing up<br /><em>adds up.</em></h2><p>Points are earned by attending events and contributing to the club community.</p></div><div className="leaderboard-total"><TrendingUp size={20} /><b>{currentMember.points.toLocaleString()}</b><small>your club points</small></div></div><div className="panel leaderboard-table"><div className="panel-heading panel-heading-padded"><h3>Member leaderboard</h3><span className="result-count">Updated today</span></div><div className="leader-list">{[...members].sort((a, b) => b.points - a.points).map((member, index) => <div className={`leader-row ${member.id === currentMember.id ? 'leader-current' : ''}`} key={member.id}><span className={`leader-rank ${index < 3 ? 'leader-rank-top' : ''}`}>{String(index + 1).padStart(2, '0')}</span><Avatar name={member.name} /><span className="leader-name"><b>{member.name}{member.id === currentMember.id && <small>YOU</small>}</b><small>{member.role === 'BOD' ? 'Board of Directors' : 'BIM Club member'}</small></span><span className="leader-points"><b>{member.points.toLocaleString()}</b><small>pts</small></span></div>)}</div></div></div> }
 function ProfilePage({ member, role, busy, onSignOut }: { member: Member; role: Role; busy: boolean; onSignOut: () => Promise<void> }) { return <div className="section-page profile-page"><div className="profile-cover"><div className="profile-avatar-wrap"><Avatar name={displayName(role, member)} size /></div><span className="profile-member-since">MEMBER SINCE {formatDate(member.joined, { month: 'long', year: 'numeric' }).toUpperCase()}</span></div><div className="profile-details"><div className="profile-name-row"><div><h2>{displayName(role, member)}</h2><span className="role-tag role-participant">{role} · KIST College</span></div><button className="button button-quiet" disabled={busy} onClick={() => void onSignOut()}>{busy ? 'Signing out…' : 'Sign out'} <LogOut size={15} /></button></div><div className="profile-info-grid"><div><span>COLLEGE EMAIL</span><b>{member.email}</b></div><div><span>MEMBERSHIP</span><b>BIM Club · Fall 2026</b></div><div><span>CLUB POINTS</span><b>{member.points.toLocaleString()} points</b></div><div><span>ROLE</span><b>{role} account</b></div></div></div></div> }
-function EventEditor({ event, form, setForm, onClose, onSave }: { event: ClubEvent | null; form: EventForm; setForm: (form: EventForm) => void; onClose: () => void; onSave: (form: EventForm) => void }) { const update = (key: keyof EventForm, value: string | number) => setForm({ ...form, [key]: value }); return <div className="modal-backdrop" role="presentation" onMouseDown={(click) => { if (click.target === click.currentTarget) onClose() }}><div className="modal event-editor-modal" role="dialog" aria-modal="true" aria-labelledby="event-modal-title"><div className="modal-heading"><div><span className="eyebrow">EVENT MANAGEMENT</span><h2 id="event-modal-title">{event ? 'Edit event' : 'Create an event'}</h2></div><button className="icon-button" aria-label="Close" onClick={onClose}><X size={19} /></button></div><div className="modal-body"><label className="form-label">Event title<input value={form.title} onChange={(e) => update('title', e.target.value)} placeholder="e.g. Product Design Sprint" /></label><label className="form-label">Description<textarea rows={3} value={form.description} onChange={(e) => update('description', e.target.value)} placeholder="What will participants learn or do?" /></label><div className="form-grid-two"><label className="form-label">Date<input type="date" value={form.date} onChange={(e) => update('date', e.target.value)} /></label><label className="form-label">Registration deadline<input type="date" value={form.registrationDeadline} onChange={(e) => update('registrationDeadline', e.target.value)} /></label></div><div className="form-grid-two"><label className="form-label">Start time<input type="time" value={form.startTime} onChange={(e) => update('startTime', e.target.value)} /></label><label className="form-label">End time<input type="time" value={form.endTime} onChange={(e) => update('endTime', e.target.value)} /></label></div><label className="form-label">Location<input value={form.location} onChange={(e) => update('location', e.target.value)} placeholder="Venue or room" /></label><div className="form-grid-two"><label className="form-label">Category<select value={form.category} onChange={(e) => update('category', e.target.value)}><option>Workshop</option><option>Design</option><option>Competition</option><option>Seminar</option><option>Community</option></select></label><label className="form-label">Maximum participants<input type="number" min="1" value={form.maxParticipants} onChange={(e) => update('maxParticipants', Number(e.target.value))} /></label></div><div className="form-grid-two"><label className="form-label">Status<select value={form.status} onChange={(e) => update('status', e.target.value)}>{(['Draft', 'Published', 'Registration Open', 'Registration Closed', 'Completed', 'Cancelled'] as EventStatus[]).map((status) => <option key={status}>{status}</option>)}</select></label><label className="form-label">Image URL<input value={form.image} onChange={(e) => update('image', e.target.value)} placeholder="Optional image URL" /></label></div></div><div className="modal-footer"><button className="button button-quiet" onClick={onClose}>Cancel</button><button className="button button-primary" onClick={() => onSave(form)}>{event ? 'Save changes' : 'Create draft'} <ArrowRight size={15} /></button></div></div></div> }
+function EventEditor({ event, form, setForm, saving, error, onClose, onSave }: { event: ClubEvent | null; form: EventForm; setForm: (form: EventForm) => void; saving: boolean; error: string; onClose: () => void; onSave: (form: EventForm) => Promise<void> }) {
+  const update = (key: keyof EventForm, value: string | number) => setForm({ ...form, [key]: value })
+  return <div className="modal-backdrop" role="presentation" onMouseDown={(click) => { if (click.target === click.currentTarget && !saving) onClose() }}>
+    <div className="modal event-editor-modal" role="dialog" aria-modal="true" aria-labelledby="event-modal-title">
+      <div className="modal-heading"><div><span className="eyebrow">EVENT MANAGEMENT</span><h2 id="event-modal-title">{event ? 'Edit event' : 'Create an event'}</h2></div><button className="icon-button" aria-label="Close" disabled={saving} onClick={onClose}><X size={19} /></button></div>
+      <div className="modal-body">
+        {error && <div className="auth-feedback auth-feedback-error" role="alert">Event was not saved: {error}</div>}
+        <label className="form-label">Event title<input value={form.title} onChange={(e) => update('title', e.target.value)} placeholder="e.g. Product Design Sprint" /></label>
+        <label className="form-label">Description<textarea rows={3} value={form.description} onChange={(e) => update('description', e.target.value)} placeholder="What will participants learn or do?" /></label>
+        <div className="form-grid-two"><label className="form-label">Date<input type="date" value={form.date} onChange={(e) => update('date', e.target.value)} /></label><label className="form-label">Registration deadline<input type="date" value={form.registrationDeadline} onChange={(e) => update('registrationDeadline', e.target.value)} /></label></div>
+        <div className="form-grid-two"><label className="form-label">Start time<input type="time" value={form.startTime} onChange={(e) => update('startTime', e.target.value)} /></label><label className="form-label">End time<input type="time" value={form.endTime} onChange={(e) => update('endTime', e.target.value)} /></label></div>
+        <label className="form-label">Location<input value={form.location} onChange={(e) => update('location', e.target.value)} placeholder="Venue or room" /></label>
+        <div className="form-grid-two"><label className="form-label">Category<select value={form.category} onChange={(e) => update('category', e.target.value)}><option>Workshop</option><option>Design</option><option>Competition</option><option>Seminar</option><option>Community</option></select></label><label className="form-label">Maximum participants<input type="number" min="1" value={form.maxParticipants} onChange={(e) => update('maxParticipants', Number(e.target.value))} /></label></div>
+        <div className="form-grid-two"><label className="form-label">Status<select value={form.status} onChange={(e) => update('status', e.target.value)}>{(['Draft', 'Published', 'Registration Open', 'Registration Closed', 'Completed', 'Cancelled'] as EventStatus[]).map((status) => <option key={status}>{status}</option>)}</select></label><label className="form-label">Image URL<input value={form.image} onChange={(e) => update('image', e.target.value)} placeholder="Optional image URL" /></label></div>
+      </div>
+      <div className="modal-footer"><button className="button button-quiet" disabled={saving} onClick={onClose}>Cancel</button><button className="button button-primary" disabled={saving} onClick={() => void onSave(form)}>{saving ? 'Saving…' : event ? 'Save changes' : 'Create event'} {!saving && <ArrowRight size={15} />}</button></div>
+    </div>
+  </div>
+}
 function DonationEditor({ onClose, onSave }: { onClose: () => void; onSave: (donation: Donation) => void }) { const [name, setName] = useState(''); const [purpose, setPurpose] = useState('General fund'); const [amount, setAmount] = useState(''); return <div className="modal-backdrop" role="presentation"><div className="modal donation-editor-modal" role="dialog" aria-modal="true" aria-labelledby="donation-modal-title"><div className="modal-heading"><div><span className="eyebrow">CLUB FINANCE</span><h2 id="donation-modal-title">Add donation</h2></div><button className="icon-button" aria-label="Close" onClick={onClose}><X size={19} /></button></div><div className="modal-body"><label className="form-label">Contributor<input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name or organization" /></label><label className="form-label">Purpose<input value={purpose} onChange={(e) => setPurpose(e.target.value)} /></label><label className="form-label">Amount (NPR)<input type="number" min="1" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0" /></label></div><div className="modal-footer"><button className="button button-quiet" onClick={onClose}>Cancel</button><button className="button button-primary" disabled={!name || !amount} onClick={() => onSave({ id: `don-${Date.now()}`, name, purpose, amount: Number(amount), date: '2026-10-05', status: 'Received' })}>Add donation <Check size={15} /></button></div></div></div> }
 function EmptyState({ title, detail, action, onAction }: { title: string; detail: string; action?: string; onAction?: () => void }) { return <div className="empty-state"><span><CalendarDays size={20} /></span><b>{title}</b><p>{detail}</p>{action && onAction && <button className="text-link" onClick={onAction}>{action} <ArrowRight size={14} /></button>}</div> }
 

@@ -4,6 +4,10 @@ import type { ActivityLogEntry, AttendanceRecord, ClubEvent, ClubFile, ClubSnaps
 
 export interface ClubRepository {
   loadSnapshot(): Promise<ClubSnapshot> | ClubSnapshot
+  loadEvents(): Promise<ClubEvent[]>
+  createEvent(event: Omit<ClubEvent, 'id'>): Promise<ClubEvent>
+  updateEvent(id: string, event: Omit<ClubEvent, 'id'>): Promise<ClubEvent>
+  updateEventStatus(event: ClubEvent, status: ClubEvent['status']): Promise<ClubEvent>
   registerForEvent(event: ClubEvent, member: Member): Promise<Registration>
   cancelRegistration(registrationId: string): Promise<void>
   recordAttendance(registration: Registration, verifiedBy: string): Promise<AttendanceRecord>
@@ -50,6 +54,35 @@ const formatDate = (value: string): string => {
   return timestamp.toISOString().slice(0, 10)
 }
 
+const mapClubEvent = (event: Record<string, any>): ClubEvent => ({
+  id: event.id,
+  title: event.title,
+  description: event.description ?? '',
+  date: formatDate(event.event_date ?? event.date ?? new Date().toISOString()),
+  startTime: event.start_time ?? '10:00',
+  endTime: event.end_time ?? '12:00',
+  location: event.location ?? 'KIST College of Management',
+  category: event.category ?? 'Community',
+  image: event.image_url ?? 'https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=1200&q=85',
+  maxParticipants: Number(event.max_participants ?? 50),
+  registrationDeadline: formatDate(event.registration_deadline ?? event.event_date ?? new Date().toISOString()),
+  status: event.status ?? 'Published',
+})
+
+const eventToDatabase = (event: Omit<ClubEvent, 'id'>) => ({
+  title: event.title.trim(),
+  description: event.description,
+  event_date: event.date,
+  start_time: event.startTime,
+  end_time: event.endTime,
+  location: event.location.trim(),
+  category: event.category,
+  image_url: event.image || null,
+  max_participants: event.maxParticipants,
+  registration_deadline: event.registrationDeadline,
+  status: event.status,
+})
+
 export const mockClubRepository: ClubRepository = {
   loadSnapshot() {
     return {
@@ -62,6 +95,18 @@ export const mockClubRepository: ClubRepository = {
       notifications: mockSnapshot.notifications.map((item) => ({ ...item })),
       activityLog: mockSnapshot.activityLog.map((item) => ({ ...item })),
     }
+  },
+  async loadEvents() {
+    return mockSnapshot.events.map((event) => ({ ...event }))
+  },
+  async createEvent(event) {
+    return { ...event, id: `evt-${Date.now()}` }
+  },
+  async updateEvent(id, event) {
+    return { ...event, id }
+  },
+  async updateEventStatus(event, status) {
+    return { ...event, status }
   },
   async registerForEvent(event, member) {
     return {
@@ -93,6 +138,59 @@ export const mockClubRepository: ClubRepository = {
 }
 
 export const supabaseClubRepository: ClubRepository = {
+  async loadEvents() {
+    if (!supabase || !hasSupabaseConfig) {
+      return mockClubRepository.loadEvents()
+    }
+
+    const { data, error } = await supabase
+      .from('events')
+      .select('*')
+      .order('event_date', { ascending: false })
+    if (error) throw error
+    return (data ?? []).map((event) => mapClubEvent(event))
+  },
+  async createEvent(event) {
+    if (!supabase || !hasSupabaseConfig) {
+      return mockClubRepository.createEvent(event)
+    }
+
+    const { data, error } = await supabase
+      .from('events')
+      .insert(eventToDatabase(event))
+      .select('*')
+      .single()
+    if (error) throw error
+    return mapClubEvent(data)
+  },
+  async updateEvent(id, event) {
+    if (!supabase || !hasSupabaseConfig) {
+      return mockClubRepository.updateEvent(id, event)
+    }
+
+    const { data, error } = await supabase
+      .from('events')
+      .update(eventToDatabase(event))
+      .eq('id', id)
+      .select('*')
+      .single()
+    if (error) throw error
+    return mapClubEvent(data)
+  },
+  async updateEventStatus(event, status) {
+    if (!supabase || !hasSupabaseConfig) {
+      return mockClubRepository.updateEventStatus(event, status)
+    }
+
+    const { data, error } = await supabase
+      .from('events')
+      .update({ status })
+      .eq('id', event.id)
+      .select('*')
+      .single()
+    if (error) throw error
+    return mapClubEvent(data)
+  },
   async loadSnapshot() {
     if (!supabase || !hasSupabaseConfig) {
       return mockClubRepository.loadSnapshot()
@@ -129,20 +227,7 @@ export const supabaseClubRepository: ClubRepository = {
       pointsByMember.set(transaction.member_id, (pointsByMember.get(transaction.member_id) ?? 0) + Number(transaction.points_delta ?? 0))
     }
 
-    const events: ClubEvent[] = ((eventsResult.data ?? []) as any[]).map((event: any) => ({
-      id: event.id,
-      title: event.title,
-      description: event.description ?? '',
-      date: formatDate(event.event_date ?? event.date ?? new Date().toISOString()),
-      startTime: event.start_time ?? '10:00',
-      endTime: event.end_time ?? '12:00',
-      location: event.location ?? 'KIST College of Management',
-      category: event.category ?? 'Community',
-      image: event.image_url ?? 'https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=1200&q=85',
-      maxParticipants: Number(event.max_participants ?? 50),
-      registrationDeadline: formatDate(event.registration_deadline ?? event.event_date ?? new Date().toISOString()),
-      status: event.status ?? 'Published',
-    }))
+    const events: ClubEvent[] = ((eventsResult.data ?? []) as any[]).map((event) => mapClubEvent(event))
 
     const members: Member[] = ((profilesResult.data ?? []) as any[]).map((profile: any) => ({
       id: profile.id,
