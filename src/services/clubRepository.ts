@@ -5,6 +5,11 @@ import type { ActivityLogEntry, AttendanceRecord, ClubEvent, ClubFile, ClubSnaps
 export interface ClubRepository {
   loadSnapshot(): Promise<ClubSnapshot> | ClubSnapshot
   loadEvents(): Promise<ClubEvent[]>
+  loadNotifications(memberId: string, role: Role): Promise<Notification[]>
+  createNotification(notification: Omit<Notification, 'id' | 'timestamp' | 'read'>, createdBy: string): Promise<Notification>
+  markNotificationRead(notificationId: string, memberId: string): Promise<void>
+  uploadProfilePhoto(memberId: string, file: File): Promise<{ path: string | null; url: string }>
+  loadProfilePhoto(photoPath: string | null): Promise<string | null>
   createEvent(event: Omit<ClubEvent, 'id'>): Promise<ClubEvent>
   updateEvent(id: string, event: Omit<ClubEvent, 'id'>): Promise<ClubEvent>
   updateEventStatus(event: ClubEvent, status: ClubEvent['status']): Promise<ClubEvent>
@@ -99,6 +104,24 @@ export const mockClubRepository: ClubRepository = {
   async loadEvents() {
     return mockSnapshot.events.map((event) => ({ ...event }))
   },
+  async loadNotifications() {
+    return mockSnapshot.notifications.map((notification) => ({ ...notification }))
+  },
+  async createNotification(notification) {
+    return {
+      ...notification,
+      id: `note-${Date.now()}`,
+      timestamp: 'Just now',
+      read: false,
+    }
+  },
+  async markNotificationRead() {},
+  async uploadProfilePhoto(_memberId, file) {
+    return { path: null, url: URL.createObjectURL(file) }
+  },
+  async loadProfilePhoto() {
+    return null
+  },
   async createEvent(event) {
     return { ...event, id: `evt-${Date.now()}` }
   },
@@ -150,6 +173,127 @@ export const supabaseClubRepository: ClubRepository = {
     if (error) throw error
     return (data ?? []).map((event) => mapClubEvent(event))
   },
+  async loadNotifications(memberId, role) {
+    if (!supabase || !hasSupabaseConfig) {
+      return mockClubRepository.loadNotifications(memberId, role)
+    }
+
+    const { data, error } = await supabase
+      .from('notifications')
+      .select('id, title, body, recipient_id, recipient_role, created_at')
+      .order('created_at', { ascending: false })
+      .limit(30)
+    if (error) throw error
+
+    const notifications = data ?? []
+    const { data: reads, error: readsError } = await supabase
+      .from('notification_reads')
+      .select('notification_id')
+      .eq('member_id', memberId)
+    if (readsError) throw readsError
+
+    const readIds = new Set((reads ?? []).map((read) => read.notification_id))
+    return notifications.map((notification) => ({
+      id: notification.id,
+      title: notification.title,
+      detail: notification.body,
+      timestamp: formatRelativeTime(notification.created_at),
+      read: readIds.has(notification.id),
+      recipient: notification.recipient_role
+        ? asRole(notification.recipient_role)
+        : notification.recipient_id
+          ? role
+          : 'All',
+    }))
+  },
+  async createNotification(notification, createdBy) {
+    if (!supabase || !hasSupabaseConfig) {
+      return mockClubRepository.createNotification(notification, createdBy)
+    }
+
+    const { data, error } = await supabase
+      .from('notifications')
+      .insert({
+        title: notification.title,
+        body: notification.detail,
+        recipient_role: notification.recipient === 'All' ? null : notification.recipient.toLowerCase(),
+        created_by: createdBy,
+      })
+      .select('id, title, body, recipient_role, created_at')
+      .single()
+    if (error) throw error
+    return {
+      id: data.id,
+      title: data.title,
+      detail: data.body,
+      timestamp: formatRelativeTime(data.created_at),
+      read: false,
+      recipient: data.recipient_role ? asRole(data.recipient_role) : 'All',
+    }
+  },
+  async markNotificationRead(notificationId, memberId) {
+    if (!supabase || !hasSupabaseConfig) return
+    const { error } = await supabase
+      .from('notification_reads')
+      .upsert(
+        { notification_id: notificationId, member_id: memberId },
+        { onConflict: 'notification_id,member_id' },
+      )
+    if (error) throw error
+  },
+  async uploadProfilePhoto(memberId, file) {
+    const extensions: Record<string, string> = {
+      'image/jpeg': 'jpg',
+      'image/png': 'png',
+      'image/webp': 'webp',
+    }
+    const extension = extensions[file.type]
+    if (!extension) throw new Error('Choose a JPG, PNG, or WebP image.')
+    if (file.size > 5 * 1024 * 1024) throw new Error('Profile photos must be 5 MB or smaller.')
+    if (!supabase || !hasSupabaseConfig) {
+      return mockClubRepository.uploadProfilePhoto(memberId, file)
+    }
+
+    const path = `${memberId}/${Date.now()}.${extension}`
+    const { error: uploadError } = await supabase.storage
+      .from('member-profile-photos')
+      .upload(path, file, { contentType: file.type, upsert: false })
+    if (uploadError) throw uploadError
+
+    const { data, error: urlError } = await supabase.storage
+      .from('member-profile-photos')
+      .createSignedUrl(path, 60 * 60)
+    if (urlError) {
+      const { error: cleanupError } = await supabase.storage
+        .from('member-profile-photos')
+        .remove([path])
+      if (cleanupError) throw new Error(`${urlError.message}; uploaded photo cleanup failed: ${cleanupError.message}`)
+      throw urlError
+    }
+
+    const { error: profileError } = await supabase
+      .from('profiles')
+      .update({ photo_path: path })
+      .eq('id', memberId)
+      .select('id')
+      .single()
+    if (profileError) {
+      const { error: cleanupError } = await supabase.storage
+        .from('member-profile-photos')
+        .remove([path])
+      if (cleanupError) throw new Error(`${profileError.message}; uploaded photo cleanup failed: ${cleanupError.message}`)
+      throw profileError
+    }
+    return { path, url: data.signedUrl }
+  },
+  async loadProfilePhoto(photoPath) {
+    if (!photoPath || !supabase || !hasSupabaseConfig) return null
+    const { data, error } = await supabase.storage
+      .from('member-profile-photos')
+      .createSignedUrl(photoPath, 60 * 60)
+    if (error) throw error
+    return data.signedUrl
+  },
   async createEvent(event) {
     if (!supabase || !hasSupabaseConfig) {
       return mockClubRepository.createEvent(event)
@@ -196,7 +340,7 @@ export const supabaseClubRepository: ClubRepository = {
       return mockClubRepository.loadSnapshot()
     }
 
-    const [eventsResult, profilesResult, registrationsResult, attendanceResult, filesResult, donationsResult, notificationsResult, activityLogsResult, pointsResult] = await Promise.all([
+    const [eventsResult, profilesResult, registrationsResult, attendanceResult, filesResult, donationsResult, notificationsResult, notificationReadsResult, activityLogsResult, pointsResult] = await Promise.all([
       supabase.from('events').select('*').order('event_date', { ascending: false }),
       supabase.from('profiles').select('*'),
       supabase.from('event_registrations').select('*'),
@@ -204,6 +348,7 @@ export const supabaseClubRepository: ClubRepository = {
       supabase.from('files').select('*'),
       supabase.from('donations').select('*'),
       supabase.from('notifications').select('*'),
+      supabase.from('notification_reads').select('notification_id'),
       supabase.from('activity_logs').select('*'),
       supabase.from('point_transactions').select('member_id, points_delta'),
     ])
@@ -216,6 +361,7 @@ export const supabaseClubRepository: ClubRepository = {
       filesResult,
       donationsResult,
       notificationsResult,
+      notificationReadsResult,
       activityLogsResult,
       pointsResult,
     ].find((result) => result.error)
@@ -281,7 +427,7 @@ export const supabaseClubRepository: ClubRepository = {
       status: donation.status === 'received' ? 'Received' : 'Pending',
     }))
 
-    const notificationReadRows = ((await supabase.from('notification_reads').select('notification_id')).data ?? []) as any[]
+    const notificationReadRows = (notificationReadsResult.data ?? []) as any[]
     const notificationReads = new Set(notificationReadRows.map((item: any) => item.notification_id))
     const notifications: Notification[] = ((notificationsResult.data ?? []) as any[]).map((notification: any) => ({
       id: notification.id,

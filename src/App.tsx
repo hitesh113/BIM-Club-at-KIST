@@ -19,7 +19,7 @@ import './App.css'
 type Page = 'home' | 'about' | 'events' | 'event-detail' | 'login' | 'register' | 'dashboard' | 'manage-events' | 'registrations' | 'attendance' | 'files' | 'donations' | 'users' | 'reports' | 'leaderboard' | 'notifications' | 'activity' | 'profile'
 type EventForm = Omit<ClubEvent, 'id'>
 type AuthFeedback = { kind: 'success' | 'error'; message: string } | null
-type AuthProfile = { id: string; full_name: string; email: string | null; role: string; created_at: string }
+type AuthProfile = { id: string; full_name: string; email: string | null; role: string; created_at: string; photo_path: string | null; photoUrl: string | null }
 const privatePages = new Set<Page>(['dashboard', 'manage-events', 'registrations', 'attendance', 'files', 'donations', 'users', 'reports', 'leaderboard', 'notifications', 'activity', 'profile'])
 
 const memberId = 'member-100'
@@ -96,6 +96,7 @@ function App() {
   const [authFeedback, setAuthFeedback] = useState<AuthFeedback>(null)
   const profileRequest = useRef(0)
   const eventsRequest = useRef(0)
+  const notificationRequest = useRef(0)
   const [events, setEvents] = useState(snapshot.events)
   const [eventsLoading, setEventsLoading] = useState(Boolean(supabase))
   const [eventsError, setEventsError] = useState('')
@@ -107,6 +108,10 @@ function App() {
   const [attendance, setAttendance] = useState(snapshot.attendance)
   const [files, setFiles] = useState(snapshot.files)
   const [notifications, setNotifications] = useState(snapshot.notifications)
+  const [notificationError, setNotificationError] = useState('')
+  const [notificationLiveError, setNotificationLiveError] = useState('')
+  const [profilePhotoBusy, setProfilePhotoBusy] = useState(false)
+  const [profilePhotoError, setProfilePhotoError] = useState('')
   const [activityLog, setActivityLog] = useState(snapshot.activityLog)
 
   const applySnapshot = (nextSnapshot: ClubSnapshot) => {
@@ -191,7 +196,7 @@ function App() {
     ? {
         id: authProfile.id,
         name: authProfile.full_name,
-        email: authProfile.email ?? authUser?.email ?? '',
+        email: authUser?.email ?? authProfile.email ?? '',
         role: role ?? 'Participant',
         joined: authProfile.created_at.slice(0, 10),
         points: members.find((member) => member.id === authProfile.id)?.points ?? 0,
@@ -219,7 +224,7 @@ function App() {
     setAuthLoading(true)
     const { data, error } = await supabase!
       .from('profiles')
-      .select('id, full_name, email, role, created_at')
+      .select('id, full_name, email, role, created_at, photo_path')
       .eq('id', session.user.id)
       .single()
 
@@ -233,7 +238,16 @@ function App() {
       return false
     }
 
-    const profile = data as AuthProfile
+    let photoUrl: string | null = null
+    try {
+      photoUrl = await clubRepository.loadProfilePhoto(data.photo_path)
+    } catch (photoError) {
+      const message = photoError instanceof Error ? `Your profile loaded, but its photo could not be loaded: ${photoError.message}` : 'Your profile photo could not be loaded.'
+      setToast(message)
+      window.setTimeout(() => setToast(''), 3000)
+    }
+    if (requestId !== profileRequest.current) return false
+    const profile = { ...data, photoUrl } as AuthProfile
     setAuthProfile(profile)
     setRole(profile.role === 'admin' ? 'Admin' : profile.role === 'bod' ? 'BOD' : 'Participant')
     setAuthLoading(false)
@@ -294,7 +308,108 @@ function App() {
   }
   const addActivity = (user: string, action: string) => setActivityLog((items) => [{ id: `log-${Date.now()}`, user, action, timestamp: 'Just now' }, ...items])
   const addNotification = (item: Omit<Notification, 'id' | 'read'>) => setNotifications((items) => [{ ...item, id: `note-${Date.now()}`, read: false }, ...items])
-  const markNotificationsRead = () => setNotifications((items) => items.map((item) => item.recipient === 'All' || item.recipient === role ? { ...item, read: true } : item))
+  const refreshNotifications = useCallback(async () => {
+    const profileId = authProfile?.id
+    if (!profileId || !role) return
+    const requestId = ++notificationRequest.current
+    try {
+      const nextNotifications = await clubRepository.loadNotifications(profileId, role)
+      if (requestId === notificationRequest.current) {
+        setNotifications(nextNotifications)
+        setNotificationError('')
+      }
+    } catch (error) {
+      if (requestId === notificationRequest.current) {
+        setNotificationError(error instanceof Error ? error.message : 'Unable to load notifications.')
+      }
+    }
+  }, [authProfile?.id, role])
+  const markNotificationsRead = async () => {
+    const visible = notifications.filter((item) => item.recipient === 'All' || item.recipient === role)
+    try {
+      await Promise.all(visible.filter((item) => !item.read).map((item) => clubRepository.markNotificationRead(item.id, currentMember.id)))
+      setNotifications((items) => items.map((item) => visible.includes(item) ? { ...item, read: true } : item))
+      setNotificationError('')
+    } catch (error) {
+      const message = error instanceof Error ? `Could not mark notifications as read: ${error.message}` : 'Could not mark notifications as read.'
+      setNotificationError(message)
+    }
+  }
+  const uploadProfilePhoto = async (file: File) => {
+    setProfilePhotoBusy(true)
+    setProfilePhotoError('')
+    try {
+      const photo = await clubRepository.uploadProfilePhoto(currentMember.id, file)
+      setAuthProfile((profile) => profile ? { ...profile, photo_path: photo.path, photoUrl: photo.url } : profile)
+      notify('Profile photo updated')
+    } catch (error) {
+      setProfilePhotoError(error instanceof Error ? error.message : 'Could not upload profile photo.')
+    } finally {
+      setProfilePhotoBusy(false)
+    }
+  }
+  const openNotification = async (item: Notification) => {
+    if (!item.read) {
+      try {
+        await clubRepository.markNotificationRead(item.id, currentMember.id)
+        setNotifications((items) => items.map((notification) => notification.id === item.id ? { ...notification, read: true } : notification))
+        setNotificationError('')
+      } catch (error) {
+        setNotificationError(error instanceof Error ? `Could not mark notification as read: ${error.message}` : 'Could not mark notification as read.')
+      }
+    }
+    setNotificationOpen(false)
+    navigate('notifications')
+  }
+  const notificationMemberId = authProfile?.id
+  useEffect(() => {
+    const client = supabase
+    if (!client || !notificationMemberId || !role) return
+
+    const initialLoad = window.setTimeout(() => { void refreshNotifications() }, 0)
+    const channel = client
+      .channel(`member-notifications-${notificationMemberId}`)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'notifications',
+      }, () => { void refreshNotifications() })
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'notification_reads',
+        filter: `member_id=eq.${notificationMemberId}`,
+      }, () => { void refreshNotifications() })
+      .subscribe((status) => {
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          setNotificationLiveError('Live notifications are unavailable. Check the Supabase Realtime setup.')
+        } else if (status === 'SUBSCRIBED') {
+          setNotificationLiveError('')
+        }
+      })
+
+    return () => {
+      window.clearTimeout(initialLoad)
+      notificationRequest.current += 1
+      void client.removeChannel(channel)
+    }
+  }, [notificationMemberId, role, refreshNotifications])
+
+  const profilePhotoPath = authProfile?.photo_path
+  useEffect(() => {
+    if (!profilePhotoPath) return
+    const refreshPhotoUrl = () => {
+      void clubRepository.loadProfilePhoto(profilePhotoPath).then((photoUrl) => {
+        setAuthProfile((profile) => profile ? { ...profile, photoUrl } : profile)
+      }).catch((error: unknown) => {
+        const message = error instanceof Error ? `Could not refresh profile photo: ${error.message}` : 'Could not refresh profile photo.'
+        setToast(message)
+        window.setTimeout(() => setToast(''), 3000)
+      })
+    }
+    const interval = window.setInterval(refreshPhotoUrl, 50 * 60 * 1000)
+    return () => window.clearInterval(interval)
+  }, [profilePhotoPath])
   const navigate = (target: Page) => {
     let nextPage = target
     if (privatePages.has(target) && (!authUser || !role)) {
@@ -370,6 +485,8 @@ function App() {
         email: member.email,
         role: member.role.toLowerCase(),
         created_at: new Date().toISOString(),
+        photo_path: null,
+        photoUrl: null,
       }
       applyDemoAuth(demoProfile)
       return
@@ -409,6 +526,8 @@ function App() {
         email: email.trim(),
         role: 'participant',
         created_at: new Date().toISOString(),
+        photo_path: null,
+        photoUrl: null,
       }
       setMembers((items) => [{ id: profile.id, name: profile.full_name, email: profile.email ?? '', role: 'Participant', joined: profile.created_at.slice(0, 10), points: 0 }, ...items])
       applyDemoAuth(profile)
@@ -485,28 +604,50 @@ function App() {
     setEventForm(event ? { ...event } : blankEvent)
     setEventModal(true)
   }
+  const announcePublishedEvent = async (event: ClubEvent): Promise<string | null> => {
+    try {
+      const notification = await clubRepository.createNotification({
+        title: `New event: ${event.title}`,
+        detail: `${formatDate(event.date)} · ${event.location}`,
+        recipient: 'All',
+      }, currentMember.id)
+      setNotifications((items) => [notification, ...items])
+      return null
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Notification could not be created.'
+      setNotificationError(message)
+      return message
+    }
+  }
   const saveEvent = async (form: EventForm) => {
     if (!form.title.trim()) return notify('Add an event title before saving')
     setEventSaving(true)
     setEventMutationError('')
     try {
+      let savedEvent: ClubEvent
+      let created = false
       if (editingEvent) {
-        const savedEvent = await clubRepository.updateEvent(editingEvent.id, {
+        savedEvent = await clubRepository.updateEvent(editingEvent.id, {
           ...form,
           image: form.image || editingEvent.image,
         })
         setEvents((items) => items.map((item) => item.id === savedEvent.id ? savedEvent : item))
-        notify('Event changes saved')
       } else {
-        const createdEvent = await clubRepository.createEvent({
+        created = true
+        savedEvent = await clubRepository.createEvent({
           ...form,
           image: form.image || snapshot.events[0]?.image || '',
         })
-        setEvents((items) => [createdEvent, ...items])
-        notify('Event created')
+        setEvents((items) => [savedEvent, ...items])
       }
+      const notificationIssue = savedEvent.status === 'Published' && (created || editingEvent?.status !== 'Published')
+        ? await announcePublishedEvent(savedEvent)
+        : null
       setEventModal(false)
       setEditingEvent(null)
+      notify(notificationIssue
+        ? `Event saved, but its notification failed: ${notificationIssue}`
+        : created ? 'Event created' : 'Event changes saved')
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Could not save the event.'
       setEventMutationError(message)
@@ -525,7 +666,14 @@ function App() {
       const savedEvent = await clubRepository.updateEventStatus(event, status)
       setEvents((items) => items.map((item) => item.id === savedEvent.id ? savedEvent : item))
       setEventMutationError('')
-      notify(`Event marked ${status.toLowerCase()}`)
+      if (status === 'Published' && event.status !== 'Published') {
+        const notificationIssue = await announcePublishedEvent(savedEvent)
+        notify(notificationIssue
+          ? `Event published, but its notification failed: ${notificationIssue}`
+          : 'Event published and members notified')
+      } else {
+        notify(`Event marked ${status.toLowerCase()}`)
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Could not update the event status.'
       setEventMutationError(message)
@@ -591,10 +739,10 @@ function App() {
         <button className="brand brand-sidebar" onClick={() => navigate('dashboard')}><span className="brand-mark"><GraduationCap size={21} /></span><span className="brand-copy"><strong>BIM<span>club</span></strong><small>KIST COLLEGE OF MANAGEMENT</small></span></button>
         <div className="workspace-label">WORKSPACE</div>
         <nav className="side-nav" aria-label="Dashboard navigation">{navigation[role].map(({ label, page: target, icon: Icon }) => <button key={label} className={`side-link ${page === target ? 'side-link-active' : ''}`} onClick={() => navigate(target)}><Icon size={17} /><span>{label}</span>{label === 'Registrations' && <i className="nav-count">6</i>}</button>)}</nav>
-        <div className="sidebar-bottom"><div className="semester-card"><span className="semester-icon"><Building2 size={15} /></span><div><b>Fall semester</b><small>2026 · KIST College</small></div><ChevronDown size={14} /></div><div className="sidebar-user"><Avatar name={currentMember.name} /><div><b>{currentMember.name}</b><small>{role} account</small></div><button className="icon-button" aria-label="Open profile" onClick={() => navigate('profile')}><Settings2 size={16} /></button></div></div>
+        <div className="sidebar-bottom"><div className="semester-card"><span className="semester-icon"><Building2 size={15} /></span><div><b>Fall semester</b><small>2026 · KIST College</small></div><ChevronDown size={14} /></div><div className="sidebar-user"><Avatar name={currentMember.name} imageUrl={authProfile?.photoUrl} /><div><b>{currentMember.name}</b><small>{role} account</small></div><button className="icon-button" aria-label="Open profile" onClick={() => navigate('profile')}><Settings2 size={16} /></button></div></div>
       </aside>
       <div className="main-column">
-        <header className="app-header"><button className="icon-button mobile-menu-button" aria-label="Open navigation" onClick={() => setMenuOpen(true)}><Menu size={20} /></button><div className="breadcrumb"><button className="icon-button back-button" aria-label="Go back" title="Go back" disabled={!canGoBack} onClick={goBack}><ChevronLeft size={16} /></button><span>Workspace</span><ChevronLeft size={14} /><b>{pageTitles[page]}</b></div><div className="header-actions"><button className="icon-button header-search" aria-label="Search events" onClick={() => { navigate(role === 'Participant' ? 'events' : 'manage-events'); setSearch('') }}><Search size={18} /></button><div className="popover-anchor"><button className="icon-button notification-button" aria-label="Notifications" onClick={() => setNotificationOpen(!notificationOpen)}><Bell size={18} /><i /></button>{notificationOpen && <div className="popover notification-popover"><div className="popover-title">Notifications <span>2 new</span></div><p><b>Workshop registrations are open</b><small>Web Development Workshop · 2h ago</small></p><p><b>New donation received</b><small>NPR 1,500 from Aarav · Yesterday</small></p></div>}</div><div className="popover-anchor"><button className="header-profile" onClick={() => setProfileOpen(!profileOpen)}><Avatar name={currentMember.name} /><span>{shortName(role, currentMember)}</span><ChevronDown size={14} /></button>{profileOpen && <div className="popover profile-popover"><div className="popover-title">{role} account</div><button className="signout-option" onClick={() => void signOut()}><LogOut size={14} /> Sign out</button></div>}</div></div></header>
+        <header className="app-header"><button className="icon-button mobile-menu-button" aria-label="Open navigation" onClick={() => setMenuOpen(true)}><Menu size={20} /></button><div className="breadcrumb"><button className="icon-button back-button" aria-label="Go back" title="Go back" disabled={!canGoBack} onClick={goBack}><ChevronLeft size={16} /></button><span>Workspace</span><ChevronLeft size={14} /><b>{pageTitles[page]}</b></div><div className="header-actions"><button className="icon-button header-search" aria-label="Search events" onClick={() => { navigate(role === 'Participant' ? 'events' : 'manage-events'); setSearch('') }}><Search size={18} /></button><div className="popover-anchor"><button className="icon-button notification-button" aria-label={`Notifications, ${notifications.filter((item) => !item.read && (item.recipient === 'All' || item.recipient === role)).length} unread`} onClick={() => setNotificationOpen(!notificationOpen)}><Bell size={18} />{notifications.some((item) => !item.read && (item.recipient === 'All' || item.recipient === role)) && <i />}</button>{notificationOpen && <div className="popover notification-popover"><div className="popover-title">Notifications <span>{notifications.filter((item) => !item.read && (item.recipient === 'All' || item.recipient === role)).length} unread</span></div>{notificationError && <p className="notification-error" role="alert">{notificationError}</p>}{notifications.filter((item) => item.recipient === 'All' || item.recipient === role).slice(0, 5).map((item) => <button className={`notification-popover-item ${item.read ? '' : 'notification-popover-unread'}`} key={item.id} onClick={() => void openNotification(item)}><b>{item.title}</b><small>{item.detail} · {item.timestamp}</small></button>)}{notifications.filter((item) => item.recipient === 'All' || item.recipient === role).length === 0 && !notificationError && <p className="notification-empty">No notifications yet.</p>}<button className="notification-view-all" onClick={() => { setNotificationOpen(false); navigate('notifications') }}>View all notifications</button></div>}</div><div className="popover-anchor"><button className="header-profile" onClick={() => setProfileOpen(!profileOpen)}><Avatar name={currentMember.name} imageUrl={authProfile?.photoUrl} /><span>{shortName(role, currentMember)}</span><ChevronDown size={14} /></button>{profileOpen && <div className="popover profile-popover"><div className="popover-title">{role} account</div><button className="signout-option" onClick={() => void signOut()}><LogOut size={14} /> Sign out</button></div>}</div></div></header>
         <main className="page-content"><PageHeading page={page} role={role} onCreate={() => startEventEditor()} onNavigate={navigate} />{renderContent()}</main>
       </div>
     </>}
@@ -669,9 +817,9 @@ function App() {
     if (page === 'users') return <UsersPage members={members} setMembers={setMembers} onAdded={() => notify('Demo member added')} />
     if (page === 'reports') return <ReportsPage events={events} registrations={registrations} donations={donations} />
     if (page === 'leaderboard') return <LeaderboardPage members={members} currentMember={currentMember} />
-    if (page === 'notifications') return <NotificationsPage notifications={notifications.filter((item) => item.recipient === 'All' || item.recipient === role)} onRead={markNotificationsRead} />
+    if (page === 'notifications') return <NotificationsPage notifications={notifications.filter((item) => item.recipient === 'All' || item.recipient === role)} error={notificationLiveError || notificationError} onRead={markNotificationsRead} />
     if (page === 'activity') return <ActivityLogPage entries={activityLog} />
-    if (page === 'profile') return <ProfilePage member={currentMember} role={role} busy={authBusy} onSignOut={signOut} />
+    if (page === 'profile') return <ProfilePage member={currentMember} role={role} photoUrl={authProfile?.photoUrl ?? null} photoBusy={profilePhotoBusy} photoError={profilePhotoError} onPhotoUpload={uploadProfilePhoto} busy={authBusy} onSignOut={signOut} />
     if (page === 'about') return <AboutPage events={events} members={members} registrations={registrations} onNavigate={navigate} />
     return <LandingPage events={events} onNavigate={navigate} onEvent={openEvent} />
   }
@@ -682,7 +830,7 @@ function shortName(_role: Role | null, member: Member) {
   const [firstName, ...lastNames] = member.name.trim().split(/\s+/)
   return `${firstName}${lastNames[0] ? ` ${lastNames[0][0]}.` : ''}`
 }
-function Avatar({ name, size = false }: { name: string; size?: boolean }) { const initials = name.split(' ').map((part) => part[0]).join('').slice(0, 2); return <span className={`avatar avatar-${initials.toLowerCase()} ${size ? 'avatar-large' : ''}`}>{initials}</span> }
+function Avatar({ name, size = false, imageUrl }: { name: string; size?: boolean; imageUrl?: string | null }) { const initials = name.split(' ').map((part) => part[0]).join('').slice(0, 2); return <span className={`avatar avatar-${initials.toLowerCase()} ${size ? 'avatar-large' : ''}`}>{imageUrl ? <img src={imageUrl} alt="" /> : initials}</span> }
 function PublicHeader({ page, onNavigate, onSignIn }: { page: Page; onNavigate: (page: Page) => void; onSignIn: () => void }) {
   return <header className={`public-header ${page === 'home' ? 'public-header-home' : ''}`}><button className="brand" onClick={() => onNavigate('home')}><span className="brand-mark"><GraduationCap size={21} /></span><span className="brand-copy"><strong>BIM<span>club</span></strong><small>KIST COLLEGE OF MANAGEMENT</small></span></button><nav className="public-nav"><button className={page === 'home' ? 'public-active' : ''} onClick={() => onNavigate('home')}>Home</button><button className={page === 'about' ? 'public-active' : ''} onClick={() => onNavigate('about')}>About</button><button className={page === 'events' || page === 'event-detail' ? 'public-active' : ''} onClick={() => onNavigate('events')}>Events</button></nav><button className="button button-dark public-login" onClick={onSignIn}>Member sign in <ArrowRight size={15} /></button></header>
 }
@@ -1050,9 +1198,9 @@ function Dashboard({ role, currentMember, events, registrations, donations, myRe
     </div>
   }
   if (role === 'BOD') return <div className="dashboard-page"><WelcomeBanner variant="bod" onCreate={onCreate} /><div className="metric-grid metric-grid-4"><Metric icon={CalendarDays} label="Upcoming events" value={String(upcoming.length).padStart(2, '0')} detail="Next 30 days" tone="green" /><Metric icon={Clock} label="Today's events" value="00" detail="On the calendar" tone="blue" /><Metric icon={Users} label="Registrations" value="128" detail="Across active events" tone="peach" /><Metric icon={CheckCircle2} label="Attendance statistics" value="84%" detail="Across completed events" tone="yellow" /></div><div className="content-grid dashboard-lower"><section className="panel"><PanelHeading title="Upcoming events" action="Manage events" onAction={() => onNavigate('manage-events')} /><div className="compact-event-list">{upcoming.slice(0, 3).map((event) => <CompactEvent key={event.id} event={event} onClick={() => onEvent(event.id)} />)}</div></section><section className="panel"><PanelHeading title="Recent activity" action="View registrations" onAction={() => onNavigate('registrations')} /><div className="timeline"><ActivityItem icon={Users} title="Prakriti Rai registered" detail="Web Development Workshop · 18m ago" tone="green" /><ActivityItem icon={CalendarDays} title="UI/UX Design Workshop published" detail="By Maya Adhikari · Yesterday" tone="blue" /><ActivityItem icon={Upload} title="Workshop guide uploaded" detail="Club files · 2 days ago" tone="peach" /></div><div className="quick-actions"><button onClick={() => onNavigate('registrations')}><ClipboardList size={15} /> Registrations</button><button onClick={() => onNavigate('attendance')}><QrCode size={15} /> Scan QR</button><button onClick={() => onNavigate('files')}><Upload size={15} /> Upload file</button></div></section></div></div>
-  return <div className="dashboard-page"><WelcomeBanner variant="admin" onCreate={onCreate} /><div className="metric-grid metric-grid-4"><Metric icon={Users} label="Total members" value="240" detail="12 joined this month" tone="green" trend="+12%" /><Metric icon={CalendarDays} label="Total events" value={String(events.length + 13)} detail="Since the club began" tone="blue" /><Metric icon={Clock} label="Upcoming events" value={String(upcoming.length)} detail="Next 30 days" tone="peach" /><Metric icon={CheckCircle2} label="Completed events" value={String(completed + 13)} detail="This academic year" tone="yellow" /><Metric icon={Activity} label="Total attendance" value="1,284" detail="Across 18 events" tone="blue" /><Metric icon={CircleDollarSign} label="Total donations" value={formatMoney(raised)} detail="This academic year" tone="green" /></div><div className="content-grid admin-content-grid"><section className="panel chart-panel"><PanelHeading title="Attendance overview" action="Full report" onAction={() => onNavigate('reports')} /><div className="chart-legend"><span><i /> Event attendance</span><span className="chart-period">May — Oct 2026 <ChevronDown size={13} /></span></div><div className="chart-wrap"><AttendanceChart /></div></section><section className="panel"><PanelHeading title="Upcoming events" action="All events" onAction={() => onNavigate('manage-events')} /><div className="compact-event-list">{upcoming.slice(0, 3).map((event) => <CompactEvent key={event.id} event={event} onClick={() => onEvent(event.id)} />)}</div></section></div><div className="content-grid admin-bottom-grid"><section className="panel table-panel"><PanelHeading title="Recent registrations" action="View all" onAction={() => onNavigate('registrations')} /><RegistrationTable registrations={registrations.slice(0, 4)} events={events} compact /></section><section className="panel"><PanelHeading title="Recent donations" action="Ledger" onAction={() => onNavigate('donations')} /><div className="donation-mini-list">{donations.slice(0, 3).map((donation) => <DonationRow key={donation.id} donation={donation} />)}</div></section><div className="panel quick-panel"><PanelHeading title="Quick actions" />{[['Create event', CalendarDays, onCreate], ['Manage members', Users, () => onNavigate('users')], ['Upload file', Upload, () => onNavigate('files')], ['View reports', ChartNoAxesCombined, () => onNavigate('reports')]].map(([label, Icon, action]) => { const ItemIcon = Icon as typeof Users; return <button key={label as string} onClick={action as () => void}><span><ItemIcon size={15} /></span>{label as string}<ArrowRight size={14} /></button> })}</div></div></div>
+  return <div className="dashboard-page"><WelcomeBanner variant="admin" memberName={currentMember.name.split(' ')[0]} onCreate={onCreate} /><div className="metric-grid metric-grid-4"><Metric icon={Users} label="Total members" value="240" detail="12 joined this month" tone="green" trend="+12%" /><Metric icon={CalendarDays} label="Total events" value={String(events.length + 13)} detail="Since the club began" tone="blue" /><Metric icon={Clock} label="Upcoming events" value={String(upcoming.length)} detail="Next 30 days" tone="peach" /><Metric icon={CheckCircle2} label="Completed events" value={String(completed + 13)} detail="This academic year" tone="yellow" /><Metric icon={Activity} label="Total attendance" value="1,284" detail="Across 18 events" tone="blue" /><Metric icon={CircleDollarSign} label="Total donations" value={formatMoney(raised)} detail="This academic year" tone="green" /></div><div className="content-grid admin-content-grid"><section className="panel chart-panel"><PanelHeading title="Attendance overview" action="Full report" onAction={() => onNavigate('reports')} /><div className="chart-legend"><span><i /> Event attendance</span><span className="chart-period">May — Oct 2026 <ChevronDown size={13} /></span></div><div className="chart-wrap"><AttendanceChart /></div></section><section className="panel"><PanelHeading title="Upcoming events" action="All events" onAction={() => onNavigate('manage-events')} /><div className="compact-event-list">{upcoming.slice(0, 3).map((event) => <CompactEvent key={event.id} event={event} onClick={() => onEvent(event.id)} />)}</div></section></div><div className="content-grid admin-bottom-grid"><section className="panel table-panel"><PanelHeading title="Recent registrations" action="View all" onAction={() => onNavigate('registrations')} /><RegistrationTable registrations={registrations.slice(0, 4)} events={events} compact /></section><section className="panel"><PanelHeading title="Recent donations" action="Ledger" onAction={() => onNavigate('donations')} /><div className="donation-mini-list">{donations.slice(0, 3).map((donation) => <DonationRow key={donation.id} donation={donation} />)}</div></section><div className="panel quick-panel"><PanelHeading title="Quick actions" />{[['Create event', CalendarDays, onCreate], ['Manage members', Users, () => onNavigate('users')], ['Upload file', Upload, () => onNavigate('files')], ['View reports', ChartNoAxesCombined, () => onNavigate('reports')]].map(([label, Icon, action]) => { const ItemIcon = Icon as typeof Users; return <button key={label as string} onClick={action as () => void}><span><ItemIcon size={15} /></span>{label as string}<ArrowRight size={14} /></button> })}</div></div></div>
 }
-function WelcomeBanner({ variant, onCreate }: { variant: 'admin' | 'bod'; onCreate: () => void }) { return <div className={`welcome-banner ${variant}-banner`}><div><span className="eyebrow">MONDAY, OCTOBER 5, 2026</span><h2>{variant === 'admin' ? <>Good morning,<br /><em>Maya.</em></> : <>Let’s make this<br />week <em>count.</em></>}</h2><p>{variant === 'admin' ? 'The BIM Club is building momentum. Here’s your club at a glance.' : 'Your committee is on track. Here’s what needs your attention.'}</p><button className="button button-lime" onClick={onCreate}><Plus size={15} /> {variant === 'admin' ? 'Create an event' : 'Create an event'}</button></div>{variant === 'admin' ? <div className="admin-banner-art"><div className="banner-stat banner-stat-top"><span>ACTIVE MEMBERS</span><b>240 <small>+12%</small></b><div className="mini-bars">{[30, 42, 37, 58, 49, 75, 69, 96].map((height, index) => <i key={index} style={{ height: `${height}%` }} />)}</div></div><div className="banner-stat banner-stat-bottom"><span>THIS SEMESTER</span><b>12 <small>events</small></b><span className="banner-spark">↗</span></div><div className="banner-orbit orbit-one" /><div className="banner-orbit orbit-two" /><span className="banner-sparkle">✳</span></div> : <div className="bod-banner-art"><span className="art-tag art-tag-one"><CalendarDays size={17} /> 3 events ahead</span><span className="art-tag art-tag-two"><Users size={17} /> 42 registrations</span><div className="art-big-icon"><Activity size={74} strokeWidth={1.15} /></div><span className="art-grid" /></div>}</div> }
+function WelcomeBanner({ variant, memberName, onCreate }: { variant: 'admin' | 'bod'; memberName?: string; onCreate: () => void }) { const [now, setNow] = useState(() => Date.now()); useEffect(() => { const interval = window.setInterval(() => setNow(Date.now()), 60_000); return () => window.clearInterval(interval) }, []); const hour = Number(new Intl.DateTimeFormat('en-US', { hour: 'numeric', hourCycle: 'h23' }).format(now)); const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening'; return <div className={`welcome-banner ${variant}-banner`}><div><span className="eyebrow">{new Intl.DateTimeFormat('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }).format(now).toUpperCase()}</span><h2>{variant === 'admin' ? <>{greeting},<br /><em>{memberName}.</em></> : <>Let’s make this<br />week <em>count.</em></>}</h2><p>{variant === 'admin' ? 'The BIM Club is building momentum. Here’s your club at a glance.' : 'Your committee is on track. Here’s what needs your attention.'}</p><button className="button button-lime" onClick={onCreate}><Plus size={15} /> Create an event</button></div>{variant === 'admin' ? <div className="admin-banner-art"><div className="banner-stat banner-stat-top"><span>ACTIVE MEMBERS</span><b>240 <small>+12%</small></b><div className="mini-bars">{[30, 42, 37, 58, 49, 75, 69, 96].map((height, index) => <i key={index} style={{ height: `${height}%` }} />)}</div></div><div className="banner-stat banner-stat-bottom"><span>THIS SEMESTER</span><b>12 <small>events</small></b><span className="banner-spark">↗</span></div><div className="banner-orbit orbit-one" /><div className="banner-orbit orbit-two" /><span className="banner-sparkle">✳</span></div> : <div className="bod-banner-art"><span className="art-tag art-tag-one"><CalendarDays size={17} /> 3 events ahead</span><span className="art-tag art-tag-two"><Users size={17} /> 42 registrations</span><div className="art-big-icon"><Activity size={74} strokeWidth={1.15} /></div><span className="art-grid" /></div>}</div> }
 function AttendanceChart() { return <ResponsiveContainer width="100%" height="100%"><AreaChart data={chartData} margin={{ top: 8, right: 4, left: -22, bottom: 0 }}><defs><linearGradient id="attendanceFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#245d9d" stopOpacity={0.18} /><stop offset="100%" stopColor="#245d9d" stopOpacity={0.01} /></linearGradient></defs><CartesianGrid vertical={false} stroke="#e4e9ef" strokeDasharray="4 6" /><XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fill: '#78889b', fontSize: 11 }} dy={9} /><YAxis axisLine={false} tickLine={false} tick={{ fill: '#78889b', fontSize: 11 }} /><Tooltip contentStyle={{ border: '1px solid #e1e7ee', borderRadius: 4, fontSize: 12 }} /><Area type="monotone" dataKey="attendees" stroke="#245d9d" strokeWidth={2.5} fill="url(#attendanceFill)" /></AreaChart></ResponsiveContainer> }
 function AttendanceScanner({ events, registrations, attendance, onClose, onConfirm }: {
   events: ClubEvent[]
@@ -1121,7 +1269,7 @@ function AttendanceScanner({ events, registrations, attendance, onClose, onConfi
     </div>
   </div>
 }
-function NotificationsPage({ notifications, onRead }: { notifications: Notification[]; onRead: () => void }) { return <div className="section-page"><div className="list-toolbar"><span className="result-count">{notifications.filter((item) => !item.read).length} unread notifications</span><button className="button button-quiet" onClick={onRead}><Check size={15} /> Mark all read</button></div><div className="panel notification-list-panel">{notifications.map((item) => <div className={`notification-row ${item.read ? '' : 'notification-unread'}`} key={item.id}><span className="notification-icon"><Bell size={15} /></span><div><b>{item.title}</b><small>{item.detail}</small></div><time>{item.timestamp}</time></div>)}{notifications.length === 0 && <EmptyState title="You are all caught up" detail="New club updates will appear here." />}</div></div> }
+function NotificationsPage({ notifications, error, onRead }: { notifications: Notification[]; error: string; onRead: () => void | Promise<void> }) { return <div className="section-page"><div className="list-toolbar"><span className="result-count">{notifications.filter((item) => !item.read).length} unread notifications</span><button className="button button-quiet" disabled={!notifications.some((item) => !item.read)} onClick={() => void onRead()}><Check size={15} /> Mark all read</button></div>{error && <div className="event-data-error" role="alert"><span><b>Notifications need attention</b><small>{error}</small></span></div>}<div className="panel notification-list-panel">{notifications.map((item) => <div className={`notification-row ${item.read ? '' : 'notification-unread'}`} key={item.id}><span className="notification-icon"><Bell size={15} /></span><div><b>{item.title}</b><small>{item.detail}</small></div><time>{item.timestamp}</time></div>)}{notifications.length === 0 && !error && <EmptyState title="You are all caught up" detail="New club updates will appear here." />}</div></div> }
 function ActivityLogPage({ entries }: { entries: ActivityLogEntry[] }) { return <div className="section-page"><div className="panel event-table-panel"><div className="panel-heading panel-heading-padded"><h3>Admin activity log</h3><span className="result-count">{entries.length} entries</span></div><div className="table-scroll"><table className="data-table"><thead><tr><th>USER</th><th>ACTION</th><th>DATE / TIME</th></tr></thead><tbody>{entries.map((entry) => <tr key={entry.id}><td><MemberCell name={entry.user} email="club workspace" /></td><td>{entry.action}</td><td>{entry.timestamp}</td></tr>)}</tbody></table></div></div></div> }
 function Metric({ icon: Icon, label, value, detail, tone, trend }: { icon: typeof Users; label: string; value: string; detail: string; tone: string; trend?: string }) { return <div className="metric-card"><div className="metric-top"><span className={`metric-icon tone-${tone}`}><Icon size={17} /></span>{trend && <span className="metric-trend"><ArrowUpRight size={13} />{trend}</span>}</div><div className="metric-value">{value}</div><div className="metric-label">{label}</div><div className="metric-detail">{detail}</div></div> }
 function PanelHeading({ title, action, onAction }: { title: string; action?: string; onAction?: () => void }) { return <div className="panel-heading"><h3>{title}</h3>{action && <button className="text-link text-link-small" onClick={onAction}>{action}<ArrowRight size={13} /></button>}</div> }
@@ -1238,7 +1386,7 @@ function DonationsPage({ role, donations, onAdd }: { role: Role; donations: Dona
 function UsersPage({ members, setMembers, onAdded }: { members: Member[]; setMembers: (update: (previous: Member[]) => Member[]) => void; onAdded: () => void }) { const [searchValue, setSearchValue] = useState(''); const filtered = members.filter((item) => `${item.name} ${item.email} ${item.role}`.toLowerCase().includes(searchValue.toLowerCase())); return <div className="section-page"><div className="list-toolbar"><SearchField value={searchValue} onChange={setSearchValue} placeholder="Search members" /><span className="result-count">{filtered.length} members</span><button className="button button-primary" onClick={() => { setMembers((items) => [{ id: `member-${Date.now()}`, name: 'New member', email: 'new.member@kist.edu.np', role: 'Participant', joined: '2026-10-05', points: 0 }, ...items]); onAdded() }}><Plus size={15} /> Add member</button></div><div className="panel event-table-panel"><div className="table-scroll"><table className="data-table"><thead><tr><th>MEMBER</th><th>ROLE</th><th>JOINED</th><th>CLUB POINTS</th><th>STATUS</th></tr></thead><tbody>{filtered.map((item) => <tr key={item.id}><td><MemberCell name={item.name} email={item.email} /></td><td><span className={`role-tag role-${item.role.toLowerCase()}`}>{item.role}</span></td><td>{formatDate(item.joined, { month: 'short', day: 'numeric', year: 'numeric' })}</td><td><b>{item.points.toLocaleString()}</b> pts</td><td><StatusBadge status="Confirmed" /></td></tr>)}</tbody></table></div></div></div> }
 function ReportsPage({ events, registrations, donations }: { events: ClubEvent[]; registrations: Registration[]; donations: Donation[] }) { const attended = registrations.filter((item) => item.status === 'Attended').length; const raised = donations.filter((item) => item.status === 'Received').reduce((sum, item) => sum + item.amount, 0); return <div className="section-page"><div className="report-topline"><span>Academic year 2026</span><button className="button button-quiet" onClick={() => window.print()}><ArrowDownToLine size={15} /> Export report</button></div><div className="metric-grid metric-grid-4"><Metric icon={CalendarDays} label="Events hosted" value={String(events.length + 13)} detail="Across this academic year" tone="green" /><Metric icon={Users} label="Registrations" value={String(registrations.length + 120)} detail="All event registrations" tone="blue" /><Metric icon={CheckCircle2} label="Total attendance" value={String(attended + 918)} detail="Checked in at events" tone="peach" /><Metric icon={CircleDollarSign} label="Raised" value={formatMoney(raised)} detail="Confirmed donations" tone="yellow" /></div><div className="content-grid report-charts"><section className="panel chart-panel"><PanelHeading title="Monthly attendance" /><div className="chart-wrap"><AttendanceChart /></div></section><section className="panel report-breakdown"><PanelHeading title="Event breakdown" /><div className="breakdown-list">{['Workshop', 'Design', 'Competition', 'Seminar'].map((label, index) => <div key={label}><span className={`breakdown-dot breakdown-${index}`} /><span>{label}</span><b>{[8, 4, 3, 3][index]}</b><small>events</small></div>)}</div><div className="report-callout"><Sparkles size={15} /><span><b>Engagement is growing</b><small>Attendance is up 18% from last semester.</small></span></div></section></div></div> }
 function LeaderboardPage({ members, currentMember }: { members: Member[]; currentMember: Member }) { return <div className="section-page leaderboard-page"><div className="leaderboard-banner"><div><span className="eyebrow">FALL 2026 · MEMBER RECOGNITION</span><h2>Showing up<br /><em>adds up.</em></h2><p>Points are earned by attending events and contributing to the club community.</p></div><div className="leaderboard-total"><TrendingUp size={20} /><b>{currentMember.points.toLocaleString()}</b><small>your club points</small></div></div><div className="panel leaderboard-table"><div className="panel-heading panel-heading-padded"><h3>Member leaderboard</h3><span className="result-count">Updated today</span></div><div className="leader-list">{[...members].sort((a, b) => b.points - a.points).map((member, index) => <div className={`leader-row ${member.id === currentMember.id ? 'leader-current' : ''}`} key={member.id}><span className={`leader-rank ${index < 3 ? 'leader-rank-top' : ''}`}>{String(index + 1).padStart(2, '0')}</span><Avatar name={member.name} /><span className="leader-name"><b>{member.name}{member.id === currentMember.id && <small>YOU</small>}</b><small>{member.role === 'BOD' ? 'Board of Directors' : 'BIM Club member'}</small></span><span className="leader-points"><b>{member.points.toLocaleString()}</b><small>pts</small></span></div>)}</div></div></div> }
-function ProfilePage({ member, role, busy, onSignOut }: { member: Member; role: Role; busy: boolean; onSignOut: () => Promise<void> }) { return <div className="section-page profile-page"><div className="profile-cover"><div className="profile-avatar-wrap"><Avatar name={displayName(role, member)} size /></div><span className="profile-member-since">MEMBER SINCE {formatDate(member.joined, { month: 'long', year: 'numeric' }).toUpperCase()}</span></div><div className="profile-details"><div className="profile-name-row"><div><h2>{displayName(role, member)}</h2><span className="role-tag role-participant">{role} · KIST College</span></div><button className="button button-quiet" disabled={busy} onClick={() => void onSignOut()}>{busy ? 'Signing out…' : 'Sign out'} <LogOut size={15} /></button></div><div className="profile-info-grid"><div><span>COLLEGE EMAIL</span><b>{member.email}</b></div><div><span>MEMBERSHIP</span><b>BIM Club · Fall 2026</b></div><div><span>CLUB POINTS</span><b>{member.points.toLocaleString()} points</b></div><div><span>ROLE</span><b>{role} account</b></div></div></div></div> }
+function ProfilePage({ member, role, photoUrl, photoBusy, photoError, onPhotoUpload, busy, onSignOut }: { member: Member; role: Role; photoUrl: string | null; photoBusy: boolean; photoError: string; onPhotoUpload: (file: File) => Promise<void>; busy: boolean; onSignOut: () => Promise<void> }) { return <div className="section-page profile-page"><div className="profile-cover"><div className="profile-avatar-wrap"><Avatar name={displayName(role, member)} size imageUrl={photoUrl} /><label className="profile-photo-trigger" aria-label="Upload profile photo" title="Upload profile photo"><Plus size={15} /><input type="file" accept="image/jpeg,image/png,image/webp" disabled={photoBusy} onChange={(event) => { const selected = event.target.files?.[0]; if (selected) void onPhotoUpload(selected); event.currentTarget.value = '' }} /></label></div><span className="profile-member-since">MEMBER SINCE {formatDate(member.joined, { month: 'long', year: 'numeric' }).toUpperCase()}</span></div>{photoError && <div className="event-data-error profile-photo-error" role="alert"><span><b>Photo was not updated</b><small>{photoError}</small></span></div>}<div className="profile-details"><div className="profile-name-row"><div><h2>{displayName(role, member)}</h2><span className="role-tag role-participant">{role} · KIST College</span></div><button className="button button-quiet" disabled={busy} onClick={() => void onSignOut()}>{busy ? 'Signing out…' : 'Sign out'} <LogOut size={15} /></button></div><div className="profile-info-grid"><div><span>COLLEGE EMAIL</span><b>{member.email || 'No email on your account'}</b></div><div><span>MEMBERSHIP</span><b>BIM Club · Fall 2026</b></div><div><span>CLUB POINTS</span><b>{member.points.toLocaleString()} points</b></div><div><span>ROLE</span><b>{role} account</b></div></div></div></div> }
 function EventEditor({ event, form, setForm, saving, error, onClose, onSave }: { event: ClubEvent | null; form: EventForm; setForm: (form: EventForm) => void; saving: boolean; error: string; onClose: () => void; onSave: (form: EventForm) => Promise<void> }) {
   const update = (key: keyof EventForm, value: string | number) => setForm({ ...form, [key]: value })
   return <div className="modal-backdrop" role="presentation" onMouseDown={(click) => { if (click.target === click.currentTarget && !saving) onClose() }}>
