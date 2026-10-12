@@ -52,7 +52,7 @@ export type AttendanceRecord = {
   date: string
   checkInTime: string
   status: 'Verified'
-  method: 'QR'
+  method: 'QR' | 'Manual'
   verifiedBy: string
 }
 

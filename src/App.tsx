@@ -78,26 +78,13 @@ const navigation: Record<Role, { label: string; page: Page; icon: typeof LayoutD
 const formatDate = (value: string, options: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric', year: 'numeric' }) =>
   new Intl.DateTimeFormat('en-US', options).format(new Date(`${value}T12:00:00`))
 const formatMoney = (value: number) => `NPR ${value.toLocaleString('en-NP')}`
+const todayDate = () => {
+  const now = new Date()
+  return new Date(now.getTime() - now.getTimezoneOffset() * 60_000).toISOString().slice(0, 10)
+}
 
 function App() {
   const [snapshot, setSnapshot] = useState<ClubSnapshot>(() => mockClubRepository.loadSnapshot() as ClubSnapshot)
-  useEffect(() => {
-    let isMounted = true
-
-    const loadData = async () => {
-      const nextSnapshot = await clubRepository.loadSnapshot()
-      if (isMounted) {
-        setSnapshot(nextSnapshot)
-      }
-    }
-
-    void loadData()
-
-    return () => {
-      isMounted = false
-    }
-  }, [])
-
   const [page, setPage] = useState<Page>('home')
   const [role, setRole] = useState<Role | null>(null)
   const [authUser, setAuthUser] = useState<User | null>(null)
@@ -114,6 +101,35 @@ function App() {
   const [files, setFiles] = useState(snapshot.files)
   const [notifications, setNotifications] = useState(snapshot.notifications)
   const [activityLog, setActivityLog] = useState(snapshot.activityLog)
+
+  const applySnapshot = (nextSnapshot: ClubSnapshot) => {
+    setSnapshot(nextSnapshot)
+    setEvents(nextSnapshot.events)
+    setRegistrations(nextSnapshot.registrations)
+    setDonations(nextSnapshot.donations)
+    setMembers(nextSnapshot.members)
+    setAttendance(nextSnapshot.attendance)
+    setFiles(nextSnapshot.files)
+    setNotifications(nextSnapshot.notifications)
+    setActivityLog(nextSnapshot.activityLog)
+  }
+  const refreshSnapshot = async () => applySnapshot(await clubRepository.loadSnapshot())
+
+  useEffect(() => {
+    if (supabase) return
+    let isMounted = true
+    void Promise.resolve(clubRepository.loadSnapshot()).then((nextSnapshot) => {
+      if (isMounted) applySnapshot(nextSnapshot)
+    }).catch((error: unknown) => {
+      if (isMounted) setAuthFeedback({
+        kind: 'error',
+        message: error instanceof Error ? `Unable to load club data: ${error.message}` : 'Unable to load club data.',
+      })
+    })
+    return () => {
+      isMounted = false
+    }
+  }, [])
   const [selectedId, setSelectedId] = useState('evt-101')
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState('All categories')
@@ -180,6 +196,17 @@ function App() {
     setAuthProfile(profile)
     setRole(profile.role === 'admin' ? 'Admin' : profile.role === 'bod' ? 'BOD' : 'Participant')
     setAuthLoading(false)
+    try {
+      await refreshSnapshot()
+    } catch (refreshError) {
+      const message = refreshError instanceof Error ? `Signed in, but club data could not be loaded: ${refreshError.message}` : 'Signed in, but club data could not be loaded.'
+      setAuthFeedback({
+        kind: 'error',
+        message,
+      })
+      setToast(message)
+      window.setTimeout(() => setToast(''), 3000)
+    }
     return true
   }
 
@@ -417,26 +444,55 @@ function App() {
     setEvents((items) => items.map((event) => event.id === id ? { ...event, status } : event))
     notify(`Event marked ${status.toLowerCase()}`)
   }
-  const register = (event: ClubEvent) => {
+  const register = async (event: ClubEvent) => {
     if (!authUser) {
       navigate('login')
       setAuthFeedback({ kind: 'error', message: 'Sign in to register for an event.' })
       return
     }
     const count = registrations.filter((item) => item.eventId === event.id && item.status !== 'Cancelled').length
-    if (event.status !== 'Registration Open' || count >= event.maxParticipants || event.registrationDeadline < '2026-10-05') return notify('Registration is closed or this event is full')
+    if (event.status !== 'Registration Open' || count >= event.maxParticipants || event.registrationDeadline < todayDate() || event.date < todayDate()) return notify('Registration is closed or this event is full')
     if (myRegistrations.some((item) => item.eventId === event.id)) return notify('You are already registered for this event')
-    setRegistrations((items) => [{
-      id: `reg-${Date.now()}`, eventId: event.id, memberId: currentMember.id, name: currentMember.name,
-      email: currentMember.email, registeredAt: '2026-10-05', status: 'Confirmed',
-    }, ...items])
-    addNotification({ title: 'Event registration successful', detail: `You are registered for ${event.title}.`, timestamp: 'Just now', recipient: 'Participant' })
-    addActivity(currentMember.name, `Participant registered for ${event.title}`)
-    notify(`You're registered for ${event.title}`)
+    try {
+      const registration = await clubRepository.registerForEvent(event, currentMember)
+      setRegistrations((items) => [registration, ...items])
+      if (supabase) {
+        try {
+          await refreshSnapshot()
+        } catch (error) {
+          notify(`Registration saved, but club data could not be refreshed: ${error instanceof Error ? error.message : 'unknown error'}`)
+          return
+        }
+      } else {
+        addNotification({ title: 'Event registration successful', detail: `You are registered for ${event.title}.`, timestamp: 'Just now', recipient: 'Participant' })
+        addActivity(currentMember.name, `Participant registered for ${event.title}`)
+      }
+      notify(`You're registered for ${event.title}`)
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Event registration failed. Please try again.')
+    }
   }
-  const cancelRegistration = (id: string) => {
-    setRegistrations((items) => items.map((item) => item.memberId === currentMember.id && item.eventId === id ? { ...item, status: 'Cancelled' } : item))
-    notify('Registration cancelled')
+  const cancelRegistration = async (registrationId: string) => {
+    const registration = myRegistrations.find((item) => item.id === registrationId)
+    if (!registration || registration.status !== 'Confirmed') {
+      notify('Only confirmed registrations can be cancelled')
+      return
+    }
+    try {
+      await clubRepository.cancelRegistration(registrationId)
+      setRegistrations((items) => items.map((item) => item.id === registrationId ? { ...item, status: 'Cancelled' } : item))
+      if (supabase) {
+        try {
+          await refreshSnapshot()
+        } catch (error) {
+          notify(`Cancellation saved, but club data could not be refreshed: ${error instanceof Error ? error.message : 'unknown error'}`)
+          return
+        }
+      }
+      notify('Registration cancelled')
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Could not cancel this registration.')
+    }
   }
 
   const publicMode = !role
@@ -457,7 +513,36 @@ function App() {
     {publicMode && <main className="public-main">{renderContent()}</main>}
     {eventModal && <EventEditor event={editingEvent} form={eventForm} setForm={setEventForm} onClose={() => setEventModal(false)} onSave={saveEvent} />}
     {donationModal && <DonationEditor onClose={() => setDonationModal(false)} onSave={(donation) => { setDonations((items) => [donation, ...items]); addActivity(currentMember.name, `${role} recorded a contribution of ${formatMoney(donation.amount)}`); addNotification({ title: 'Donation successful', detail: `${formatMoney(donation.amount)} contribution recorded.`, timestamp: 'Just now', recipient: role === 'Participant' ? 'Participant' : 'All' }); setDonationModal(false); notify('Contribution recorded in the demo ledger') }} />}
-    {scannerOpen && <AttendanceScanner events={events} registrations={registrations} attendance={attendance} onClose={() => setScannerOpen(false)} onConfirm={(record) => { setAttendance((items) => [...items, record]); setRegistrations((items) => items.map((item) => item.id === record.registrationId ? { ...item, status: 'Attended' } : item)); setMembers((items) => items.map((item) => item.id === record.memberId ? { ...item, points: item.points + 100 } : item)); addActivity(role === 'BOD' ? 'Sujan Karki' : 'Maya Adhikari', `BOD recorded attendance for ${record.memberName}`); addNotification({ title: 'Attendance recorded', detail: `${record.memberName} was checked in through QR-based attendance verification.`, timestamp: 'Just now', recipient: 'All' }); setScannerOpen(false); notify('Attendance recorded') }} />}
+    {scannerOpen && <AttendanceScanner
+      events={events}
+      registrations={registrations.filter((item) => item.status !== 'Cancelled')}
+      attendance={attendance}
+      onClose={() => setScannerOpen(false)}
+      onConfirm={async (registration) => {
+        try {
+          const record = await clubRepository.recordAttendance(registration, currentMember.name)
+          setAttendance((items) => [record, ...items])
+          setRegistrations((items) => items.map((item) => item.id === registration.id ? { ...item, status: 'Attended' } : item))
+          if (supabase) {
+            try {
+              await refreshSnapshot()
+            } catch (error) {
+              setScannerOpen(false)
+              notify(`Attendance recorded, but club data could not be refreshed: ${error instanceof Error ? error.message : 'unknown error'}`)
+              return
+            }
+          } else {
+            setMembers((items) => items.map((item) => item.id === registration.memberId ? { ...item, points: item.points + 100 } : item))
+            addActivity(currentMember.name, `Recorded attendance for ${registration.name}`)
+            addNotification({ title: 'Attendance recorded', detail: `${registration.name} was checked in for an event.`, timestamp: 'Just now', recipient: 'All' })
+          }
+          setScannerOpen(false)
+          notify('Attendance recorded')
+        } catch (error) {
+          notify(error instanceof Error ? error.message : 'Could not record attendance.')
+        }
+      }}
+    />}
     {toast && <div className="toast"><span><Check size={15} /></span>{toast}</div>}
   </div>
 
@@ -476,10 +561,20 @@ function App() {
     const countFor = (id: string) => registrations.filter((item) => item.eventId === id && item.status !== 'Cancelled').length
     if (page === 'dashboard') return <Dashboard role={role} currentMember={currentMember} events={events} registrations={registrations} donations={donations} myRegistrations={myRegistrations} onNavigate={navigate} onCreate={() => startEventEditor()} onEvent={openEvent} />
     if (page === 'events') return <EventsPage events={filteredEvents} search={search} setSearch={setSearch} category={category} setCategory={setCategory} statusFilter={statusFilter} setStatusFilter={setStatusFilter} onEvent={openEvent} />
-    if (page === 'event-detail') return <EventDetails event={selectedEvent} registrations={registrations} isRegistered={myRegistrations.some((item) => item.eventId === selectedEvent?.id)} onRegister={() => selectedEvent && register(selectedEvent)} onCancel={() => selectedEvent && cancelRegistration(selectedEvent.id)} />
+    if (page === 'event-detail') {
+      const registration = myRegistrations.find((item) => item.eventId === selectedEvent?.id)
+      return <EventDetails
+        event={selectedEvent}
+        registrations={registrations}
+        isRegistered={Boolean(registration)}
+        registrationStatus={registration?.status}
+        onRegister={() => { if (selectedEvent) void register(selectedEvent) }}
+        onCancel={registration?.status === 'Confirmed' ? () => void cancelRegistration(registration.id) : undefined}
+      />
+    }
     if (page === 'manage-events') return <ManageEvents events={filteredEvents} countFor={countFor} search={search} setSearch={setSearch} category={category} setCategory={setCategory} statusFilter={statusFilter} setStatusFilter={setStatusFilter} onEdit={startEventEditor} onCreate={() => startEventEditor()} onEvent={openEvent} onStatus={setEventStatus} />
     if (page === 'registrations') return <RegistrationsPage events={events} registrations={registrations} query={query} setQuery={setQuery} onAttendance={(id) => { setRegistrations((items) => items.map((item) => item.id === id ? { ...item, status: 'Attended' } : item)); notify('Attendance recorded') }} />
-    if (page === 'attendance') return <AttendancePage role={role} registrations={registrations} attendance={attendance} events={events} onScan={() => setScannerOpen(true)} />
+    if (page === 'attendance') return <AttendancePage role={role} currentMember={currentMember} registrations={registrations} attendance={attendance} events={events} onScan={() => setScannerOpen(true)} />
     if (page === 'files') return <FilesPage role={role} files={files} onUpload={(file) => { setFiles((items) => [file, ...items]); addActivity(role === 'BOD' ? 'Sujan Karki' : 'Maya Adhikari', `${role} uploaded ${file.name}`); notify('File added to club files') }} onDownload={() => notify('Download prepared for this demo file')} />
     if (page === 'donations' && role === 'Participant') return <ParticipantDonationsPage donations={donations} onContribute={() => setDonationModal(true)} />
     if (page === 'donations') return <DonationsPage role={role} donations={donations} onAdd={() => setDonationModal(true)} />
@@ -546,7 +641,7 @@ function PublicFooter({ onNavigate }: { onNavigate: (page: Page) => void }) {
   </footer>
 }
 function LandingPage({ events, onNavigate, onEvent }: { events: ClubEvent[]; onNavigate: (page: Page) => void; onEvent: (id: string) => void }) {
-  const upcoming = events.filter((event) => event.date >= '2026-10-05' && event.status !== 'Cancelled').slice(0, 3)
+  const upcoming = events.filter((event) => event.date >= todayDate() && event.status !== 'Cancelled').slice(0, 3)
   return <div className="landing-page">
     <section className="landing-hero home-hero">
       <div className="home-hero-copy">
@@ -790,12 +885,12 @@ function EventsPage({ events, search, setSearch, category, setCategory, statusFi
     </div>
   </div>
 }
-function EventDetails({ event, registrations, isRegistered = false, onRegister, onCancel }: { event?: ClubEvent; registrations: Registration[]; isRegistered?: boolean; onRegister: () => void; onCancel?: () => void }) {
+function EventDetails({ event, registrations, isRegistered = false, registrationStatus, onRegister, onCancel }: { event?: ClubEvent; registrations: Registration[]; isRegistered?: boolean; registrationStatus?: Registration['status']; onRegister: () => void; onCancel?: () => void }) {
   if (!event) return <EmptyState title="Event not found" detail="This event may have been removed." />
   const count = registrations.filter((item) => item.eventId === event.id && item.status !== 'Cancelled').length
   const available = Math.max(0, event.maxParticipants - count)
-  const open = event.status === 'Registration Open' && available > 0 && event.registrationDeadline >= '2026-10-05'
-  return <div className="detail-page"><div className="detail-layout"><div className="detail-main"><div className="detail-image"><img src={event.image} alt="" /><span className="category-pill">{event.category}</span></div><div className="detail-kicker"><StatusBadge status={event.status} /> <span>·</span> {formatDate(event.date, { month: 'long', day: 'numeric', year: 'numeric' })}</div><h1>{event.title}</h1><p className="detail-description">{event.description}</p><div className="detail-facts"><div><CalendarDays size={18} /><span><small>DATE & TIME</small><b>{formatDate(event.date, { weekday: 'long', month: 'long', day: 'numeric' })}</b><span>{event.startTime} – {event.endTime}</span></span></div><div><MapPin size={18} /><span><small>LOCATION</small><b>{event.location}</b><span>Kathmandu, Nepal</span></span></div><div><Users size={18} /><span><small>CAPACITY</small><b>{event.maxParticipants} seats</b><span>Registration closes {formatDate(event.registrationDeadline, { month: 'long', day: 'numeric' })}</span></span></div></div><div className="detail-about"><h2>About this event</h2><p>{event.description} Bring your laptop, your questions, and an open mind. All BIM students are welcome; no prior experience is needed.</p></div></div><aside className="registration-card"><div className="eyebrow">SAVE YOUR SEAT</div><h3>{formatDate(event.date, { month: 'long', day: 'numeric' })}</h3><p>{event.startTime} – {event.endTime}</p><div className="capacity-line"><div><b>{event.maxParticipants}</b><span> seats</span></div><small>{count} registered</small></div><div className="capacity-track"><span style={{ width: `${Math.min(100, count / event.maxParticipants * 100)}%` }} /></div><div className="seat-count"><span><i />{available} seats available</span><b>{Math.round(count / event.maxParticipants * 100)}%</b></div>{isRegistered ? <><div className="registered-note"><CheckCircle2 size={17} /><span><b>You’re on the list</b><small>Registration confirmed</small></span></div>{onCancel && <button className="button button-cancel" onClick={onCancel}>Cancel registration</button>}</> : <button className={`button ${open ? 'button-primary' : 'button-disabled'}`} disabled={!open} onClick={onRegister}>{open ? 'Register for event' : available === 0 ? 'Event is full' : 'Registration closed'} {open && <ArrowRight size={15} />}</button>}<small className="registration-note">No fee · Open to KIST students</small></aside></div></div>
+  const open = event.status === 'Registration Open' && available > 0 && event.registrationDeadline >= todayDate() && event.date >= todayDate()
+  return <div className="detail-page"><div className="detail-layout"><div className="detail-main"><div className="detail-image"><img src={event.image} alt="" /><span className="category-pill">{event.category}</span></div><div className="detail-kicker"><StatusBadge status={event.status} /> <span>·</span> {formatDate(event.date, { month: 'long', day: 'numeric', year: 'numeric' })}</div><h1>{event.title}</h1><p className="detail-description">{event.description}</p><div className="detail-facts"><div><CalendarDays size={18} /><span><small>DATE & TIME</small><b>{formatDate(event.date, { weekday: 'long', month: 'long', day: 'numeric' })}</b><span>{event.startTime} – {event.endTime}</span></span></div><div><MapPin size={18} /><span><small>LOCATION</small><b>{event.location}</b><span>Kathmandu, Nepal</span></span></div><div><Users size={18} /><span><small>CAPACITY</small><b>{event.maxParticipants} seats</b><span>Registration closes {formatDate(event.registrationDeadline, { month: 'long', day: 'numeric' })}</span></span></div></div><div className="detail-about"><h2>About this event</h2><p>{event.description} Bring your laptop, your questions, and an open mind. All BIM students are welcome; no prior experience is needed.</p></div></div><aside className="registration-card"><div className="eyebrow">SAVE YOUR SEAT</div><h3>{formatDate(event.date, { month: 'long', day: 'numeric' })}</h3><p>{event.startTime} – {event.endTime}</p><div className="capacity-line"><div><b>{event.maxParticipants}</b><span> seats</span></div><small>{count} registered</small></div><div className="capacity-track"><span style={{ width: `${Math.min(100, count / event.maxParticipants * 100)}%` }} /></div><div className="seat-count"><span><i />{available} seats available</span><b>{Math.round(count / event.maxParticipants * 100)}%</b></div>{isRegistered ? <><div className="registered-note"><CheckCircle2 size={17} /><span><b>You’re on the list</b><small>{registrationStatus === 'Attended' ? 'Attendance verified' : 'Registration confirmed'}</small></span></div>{onCancel && <button className="button button-cancel" onClick={onCancel}>Cancel registration</button>}</> : <button className={`button ${open ? 'button-primary' : 'button-disabled'}`} disabled={!open} onClick={onRegister}>{open ? 'Register for event' : available === 0 ? 'Event is full' : 'Registration closed'} {open && <ArrowRight size={15} />}</button>}<small className="registration-note">No fee · Open to KIST students</small></aside></div></div>
 }
 function AuthPage({ mode, busy, feedback, onSignIn, onSignUp, onNavigate }: {
   mode: 'login' | 'register'
@@ -832,13 +927,13 @@ function AuthPage({ mode, busy, feedback, onSignIn, onSignUp, onNavigate }: {
   </div>
 }
 function Dashboard({ role, currentMember, events, registrations, donations, myRegistrations, onNavigate, onCreate, onEvent }: { role: Role; currentMember: Member; events: ClubEvent[]; registrations: Registration[]; donations: Donation[]; myRegistrations: Registration[]; onNavigate: (page: Page) => void; onCreate: () => void; onEvent: (id: string) => void }) {
-  const upcoming = events.filter((event) => event.date >= '2026-10-05' && event.status !== 'Cancelled').sort((a, b) => a.date.localeCompare(b.date))
+  const upcoming = events.filter((event) => event.date >= todayDate() && event.status !== 'Cancelled').sort((a, b) => a.date.localeCompare(b.date))
   const completed = events.filter((event) => event.status === 'Completed').length
   const raised = donations.filter((donation) => donation.status === 'Received').reduce((sum, donation) => sum + donation.amount, 0)
   if (role === 'Participant') {
     const registeredEvents = myRegistrations
       .map((registration) => events.find((event) => event.id === registration.eventId))
-      .filter((event): event is ClubEvent => Boolean(event && event.date >= '2026-10-05' && event.status !== 'Cancelled'))
+      .filter((event): event is ClubEvent => Boolean(event && event.date >= todayDate() && event.status !== 'Cancelled'))
       .sort((a, b) => a.date.localeCompare(b.date))
     const attendedCount = myRegistrations.filter((registration) => registration.status === 'Attended').length
 
@@ -870,7 +965,73 @@ function Dashboard({ role, currentMember, events, registrations, donations, myRe
 }
 function WelcomeBanner({ variant, onCreate }: { variant: 'admin' | 'bod'; onCreate: () => void }) { return <div className={`welcome-banner ${variant}-banner`}><div><span className="eyebrow">MONDAY, OCTOBER 5, 2026</span><h2>{variant === 'admin' ? <>Good morning,<br /><em>Maya.</em></> : <>Let’s make this<br />week <em>count.</em></>}</h2><p>{variant === 'admin' ? 'The BIM Club is building momentum. Here’s your club at a glance.' : 'Your committee is on track. Here’s what needs your attention.'}</p><button className="button button-lime" onClick={onCreate}><Plus size={15} /> {variant === 'admin' ? 'Create an event' : 'Create an event'}</button></div>{variant === 'admin' ? <div className="admin-banner-art"><div className="banner-stat banner-stat-top"><span>ACTIVE MEMBERS</span><b>240 <small>+12%</small></b><div className="mini-bars">{[30, 42, 37, 58, 49, 75, 69, 96].map((height, index) => <i key={index} style={{ height: `${height}%` }} />)}</div></div><div className="banner-stat banner-stat-bottom"><span>THIS SEMESTER</span><b>12 <small>events</small></b><span className="banner-spark">↗</span></div><div className="banner-orbit orbit-one" /><div className="banner-orbit orbit-two" /><span className="banner-sparkle">✳</span></div> : <div className="bod-banner-art"><span className="art-tag art-tag-one"><CalendarDays size={17} /> 3 events ahead</span><span className="art-tag art-tag-two"><Users size={17} /> 42 registrations</span><div className="art-big-icon"><Activity size={74} strokeWidth={1.15} /></div><span className="art-grid" /></div>}</div> }
 function AttendanceChart() { return <ResponsiveContainer width="100%" height="100%"><AreaChart data={chartData} margin={{ top: 8, right: 4, left: -22, bottom: 0 }}><defs><linearGradient id="attendanceFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#245d9d" stopOpacity={0.18} /><stop offset="100%" stopColor="#245d9d" stopOpacity={0.01} /></linearGradient></defs><CartesianGrid vertical={false} stroke="#e4e9ef" strokeDasharray="4 6" /><XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fill: '#78889b', fontSize: 11 }} dy={9} /><YAxis axisLine={false} tickLine={false} tick={{ fill: '#78889b', fontSize: 11 }} /><Tooltip contentStyle={{ border: '1px solid #e1e7ee', borderRadius: 4, fontSize: 12 }} /><Area type="monotone" dataKey="attendees" stroke="#245d9d" strokeWidth={2.5} fill="url(#attendanceFill)" /></AreaChart></ResponsiveContainer> }
-function AttendanceScanner({ events, registrations, attendance, onClose, onConfirm }: { events: ClubEvent[]; registrations: Registration[]; attendance: AttendanceRecord[]; onClose: () => void; onConfirm: (record: AttendanceRecord) => void }) { const [eventId, setEventId] = useState(events[0]?.id ?? ''); const [registrationId, setRegistrationId] = useState(''); const [scanMessage, setScanMessage] = useState('Starting camera…'); const selected = registrations.find((item) => item.id === registrationId); const duplicate = Boolean(selected && attendance.some((item) => item.registrationId === selected.id)); useEffect(() => { let scanner: import('html5-qrcode').Html5Qrcode | undefined; let active = true; import('html5-qrcode').then(({ Html5Qrcode }) => { if (!active) return; scanner = new Html5Qrcode('attendance-qr-reader'); scanner.start({ facingMode: 'environment' }, { fps: 10, qrbox: 220 }, (decodedText) => { const decodedId = decodedText.startsWith('BIMCLUB:') ? decodedText.slice(8) : decodedText; const match = registrations.find((item) => item.id === decodedId); if (!match) return setScanMessage('QR code is not a registered participant for this event.'); setEventId(match.eventId); setRegistrationId(match.id); setScanMessage('Participant QR scanned. Review the details below.'); }, () => undefined).catch(() => setScanMessage('Camera unavailable. Enter a QR payload below.')); }); return () => { active = false; scanner?.stop().catch(() => undefined); }; }, [registrations]); const submitPayload = (value: string) => { const decodedId = value.startsWith('BIMCLUB:') ? value.slice(8) : value; const match = registrations.find((item) => item.id === decodedId); if (!match) return setScanMessage('QR payload not recognized. Use a registered participant QR.'); setEventId(match.eventId); setRegistrationId(match.id); setScanMessage('Participant QR verified. Review the details below.'); }; return <div className="modal-backdrop" role="presentation"><div className="modal donation-editor-modal" role="dialog" aria-modal="true"><div className="modal-heading"><div><span className="eyebrow">QR-BASED ATTENDANCE VERIFICATION</span><h2>Verify participant check-in</h2></div><button className="icon-button" aria-label="Close" onClick={onClose}><X size={19} /></button></div><div className="modal-body"><label className="form-label">Event<select value={eventId} onChange={(event) => { setEventId(event.target.value); setRegistrationId('') }}>{events.map((event) => <option key={event.id} value={event.id}>{event.title}</option>)}</select></label><div id="attendance-qr-reader" className="qr-reader" /><div className="scan-preview"><QrCode size={42} /><b>{scanMessage}</b><small>Allow camera access, or enter a QR payload such as BIMCLUB:reg-001.</small></div><label className="form-label">QR payload<input placeholder="BIMCLUB:reg-001" onChange={(event) => submitPayload(event.target.value)} /></label>{selected && <div className="registered-note"><CheckCircle2 size={17} /><span><b>{selected.name}</b><small>{selected.email} · {duplicate ? 'Already checked in for this event.' : 'Registration confirmed.'}</small></span></div>}</div><div className="modal-footer"><button className="button button-quiet" onClick={onClose}>Cancel</button><button className="button button-primary" disabled={!selected || duplicate} onClick={() => selected && onConfirm({ id: `att-${Date.now()}`, eventId: selected.eventId, registrationId: selected.id, memberId: selected.memberId, memberName: selected.name, date: '2026-10-05', checkInTime: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }), status: 'Verified', method: 'QR', verifiedBy: 'BOD' })}>{duplicate ? 'Already recorded' : 'Confirm attendance'} <Check size={15} /></button></div></div></div> }
+function AttendanceScanner({ events, registrations, attendance, onClose, onConfirm }: {
+  events: ClubEvent[]
+  registrations: Registration[]
+  attendance: AttendanceRecord[]
+  onClose: () => void
+  onConfirm: (registration: Registration) => Promise<void>
+}) {
+  const [eventId, setEventId] = useState(events[0]?.id ?? '')
+  const [registrationId, setRegistrationId] = useState('')
+  const [scanMessage, setScanMessage] = useState('Starting camera…')
+  const selected = registrations.find((item) => item.id === registrationId)
+  const duplicate = Boolean(selected && attendance.some((item) => item.registrationId === selected.id))
+
+  useEffect(() => {
+    let scanner: import('html5-qrcode').Html5Qrcode | undefined
+    let active = true
+    const startScanner = async () => {
+      try {
+        const { Html5Qrcode } = await import('html5-qrcode')
+        if (!active) return
+        scanner = new Html5Qrcode('attendance-qr-reader')
+        await scanner.start({ facingMode: 'environment' }, { fps: 10, qrbox: 220 }, (decodedText) => {
+          const decodedId = decodedText.startsWith('BIMCLUB:') ? decodedText.slice(8) : decodedText
+          const match = registrations.find((item) => item.id === decodedId && item.status === 'Confirmed')
+          if (!match) return setScanMessage('QR code does not belong to an active event registration.')
+          setEventId(match.eventId)
+          setRegistrationId(match.id)
+          setScanMessage('Participant QR scanned. Review the details below.')
+        }, () => undefined)
+      } catch {
+        if (active) setScanMessage('Camera unavailable. Enter the registration QR payload below.')
+      }
+    }
+    void startScanner()
+    return () => {
+      active = false
+      void scanner?.stop().catch(() => undefined)
+    }
+  }, [registrations])
+
+  const submitPayload = (value: string) => {
+    const decodedId = value.startsWith('BIMCLUB:') ? value.slice(8) : value
+    const match = registrations.find((item) => item.id === decodedId && item.status === 'Confirmed')
+    if (!match) {
+      setRegistrationId('')
+      setScanMessage('QR payload not recognized. Use an active event registration QR.')
+      return
+    }
+    setEventId(match.eventId)
+    setRegistrationId(match.id)
+    setScanMessage('Participant QR verified. Review the details below.')
+  }
+
+  return <div className="modal-backdrop" role="presentation">
+    <div className="modal donation-editor-modal" role="dialog" aria-modal="true">
+      <div className="modal-heading"><div><span className="eyebrow">QR-BASED ATTENDANCE VERIFICATION</span><h2>Verify participant check-in</h2></div><button className="icon-button" aria-label="Close" onClick={onClose}><X size={19} /></button></div>
+      <div className="modal-body">
+        <label className="form-label">Event<select value={eventId} onChange={(event) => { setEventId(event.target.value); setRegistrationId('') }}>{events.map((event) => <option key={event.id} value={event.id}>{event.title}</option>)}</select></label>
+        <div id="attendance-qr-reader" className="qr-reader" />
+        <div className="scan-preview"><QrCode size={42} /><b>{scanMessage}</b><small>Allow camera access, or enter an active registration QR payload.</small></div>
+        <label className="form-label">QR payload<input placeholder="BIMCLUB:registration-id" onChange={(event) => submitPayload(event.target.value)} /></label>
+        {selected && <div className="registered-note"><CheckCircle2 size={17} /><span><b>{selected.name}</b><small>{selected.email} · {duplicate ? 'Already checked in for this event.' : 'Registration confirmed.'}</small></span></div>}
+      </div>
+      <div className="modal-footer"><button className="button button-quiet" onClick={onClose}>Cancel</button><button className="button button-primary" disabled={!selected || duplicate || selected.status !== 'Confirmed'} onClick={() => { if (selected) void onConfirm(selected) }}>{duplicate ? 'Already recorded' : 'Confirm attendance'} <Check size={15} /></button></div>
+    </div>
+  </div>
+}
 function NotificationsPage({ notifications, onRead }: { notifications: Notification[]; onRead: () => void }) { return <div className="section-page"><div className="list-toolbar"><span className="result-count">{notifications.filter((item) => !item.read).length} unread notifications</span><button className="button button-quiet" onClick={onRead}><Check size={15} /> Mark all read</button></div><div className="panel notification-list-panel">{notifications.map((item) => <div className={`notification-row ${item.read ? '' : 'notification-unread'}`} key={item.id}><span className="notification-icon"><Bell size={15} /></span><div><b>{item.title}</b><small>{item.detail}</small></div><time>{item.timestamp}</time></div>)}{notifications.length === 0 && <EmptyState title="You are all caught up" detail="New club updates will appear here." />}</div></div> }
 function ActivityLogPage({ entries }: { entries: ActivityLogEntry[] }) { return <div className="section-page"><div className="panel event-table-panel"><div className="panel-heading panel-heading-padded"><h3>Admin activity log</h3><span className="result-count">{entries.length} entries</span></div><div className="table-scroll"><table className="data-table"><thead><tr><th>USER</th><th>ACTION</th><th>DATE / TIME</th></tr></thead><tbody>{entries.map((entry) => <tr key={entry.id}><td><MemberCell name={entry.user} email="club workspace" /></td><td>{entry.action}</td><td>{entry.timestamp}</td></tr>)}</tbody></table></div></div></div> }
 function Metric({ icon: Icon, label, value, detail, tone, trend }: { icon: typeof Users; label: string; value: string; detail: string; tone: string; trend?: string }) { return <div className="metric-card"><div className="metric-top"><span className={`metric-icon tone-${tone}`}><Icon size={17} /></span>{trend && <span className="metric-trend"><ArrowUpRight size={13} />{trend}</span>}</div><div className="metric-value">{value}</div><div className="metric-label">{label}</div><div className="metric-detail">{detail}</div></div> }
@@ -888,11 +1049,85 @@ function MemberCell({ name, email }: { name: string; email: string }) { return <
 function RegistrationTable({ registrations, events, compact = false }: { registrations: Registration[]; events: ClubEvent[]; compact?: boolean }) { return <div className="table-scroll"><table className={`data-table ${compact ? 'data-table-compact' : ''}`}><thead><tr><th>MEMBER</th><th>EVENT</th><th>STATUS</th></tr></thead><tbody>{registrations.map((item) => <tr key={item.id}><td><MemberCell name={item.name} email={item.email.split('@')[0]} /></td><td><span className="table-event-title">{events.find((event) => event.id === item.eventId)?.title ?? 'Removed event'}</span></td><td><StatusBadge status={item.status} /></td></tr>)}</tbody></table></div> }
 function DonationRow({ donation }: { donation: Donation }) { return <div className="donation-row"><span className="donation-icon"><Heart size={14} /></span><div><b>{donation.name}</b><small>{donation.purpose}</small></div><strong>{formatMoney(donation.amount)}</strong></div> }
 function ParticipantDonationsPage({ donations, onContribute }: { donations: Donation[]; onContribute: () => void }) { const mine = donations.filter((item) => item.name === 'Aarav Shrestha'); const total = mine.reduce((sum, item) => sum + item.amount, 0); return <div className="section-page"><div className="donation-summary"><div><span className="eyebrow">YOUR SUPPORT</span><div className="donation-total">{formatMoney(total)}</div><p>Your contributions help fund workshops and student projects.</p><button className="button button-lime" onClick={onContribute}><Heart size={15} /> Make a contribution</button></div><div className="donation-summary-icon"><Heart size={32} strokeWidth={1.3} /></div></div><div className="panel event-table-panel"><div className="panel-heading panel-heading-padded"><h3>Donation history</h3><span className="result-count">{mine.length} contributions</span></div><div className="table-scroll"><table className="data-table"><thead><tr><th>PURPOSE</th><th>DATE</th><th>AMOUNT</th><th>STATUS</th></tr></thead><tbody>{mine.map((item) => <tr key={item.id}><td>{item.purpose}</td><td>{formatDate(item.date, { month: 'short', day: 'numeric', year: 'numeric' })}</td><td><b>{formatMoney(item.amount)}</b></td><td><StatusBadge status={item.status} /></td></tr>)}</tbody></table></div>{mine.length === 0 && <EmptyState title="No contributions yet" detail="Your contribution history will appear here." />}</div><p className="disclaimer-note"><ShieldCheck size={14} /> Mock contribution flow only. No real payment processing is connected.</p></div> }
-function AttendancePage({ role, registrations, attendance, events, onScan }: { role: Role; registrations: Registration[]; attendance: AttendanceRecord[]; events: ClubEvent[]; onScan: () => void }) {
-  const attended = role === 'Participant' ? attendance.filter((item) => item.memberId === memberId).length : attendance.length
-  const registered = role === 'Participant' ? registrations.filter((item) => item.memberId === memberId && item.status !== 'Cancelled').length : registrations.filter((item) => item.status !== 'Cancelled').length
-  if (role === 'Participant') return <div className="section-page"><div className="attendance-callout"><div className="scan-mark"><QrCode size={24} /></div><div><b>QR-based attendance verification</b><small>Show your event QR/check-in option to the BOD team at the venue.</small></div><button className="button button-primary" onClick={() => onScan()}><QrCode size={15} /> View event QR</button></div><div className="metric-grid metric-grid-3"><Metric icon={CheckCircle2} label="Events attended" value={String(attended).padStart(2, '0')} detail="This academic year" tone="green" /><Metric icon={Activity} label="Attendance rate" value={`${Math.round(attended / Math.max(registered, 1) * 100)}%`} detail={`${attended} of ${registered} registered events`} tone="blue" /><Metric icon={TrendingUp} label="Club points" value={`${attended * 100}`} detail="100 points per verified event" tone="peach" /></div><div className="panel attendance-history"><PanelHeading title="Your attendance history" /><div className="history-list">{registrations.filter((item) => item.memberId === memberId).map((item) => <div className="history-row" key={item.id}><span className={`history-check ${item.status === 'Attended' ? 'history-done' : ''}`}>{item.status === 'Attended' ? <Check size={15} /> : <CalendarDays size={15} />}</span><div><b>{events.find((event) => event.id === item.eventId)?.title ?? 'Club event'}</b><small>{formatDate(item.registeredAt)} · {item.status === 'Attended' ? 'QR verified attendance recorded' : 'Registered · check-in pending'}</small></div><StatusBadge status={item.status} /></div>)}</div></div></div>
-  return <div className="section-page"><div className="attendance-callout"><div className="scan-mark"><QrCode size={24} /></div><div><b>QR-based attendance verification</b><small>Scan a participant QR and confirm once. Duplicate attendance is blocked.</small></div><button className="button button-primary" onClick={onScan}><ScanLine size={15} /> Open scanner</button></div><div className="metric-grid metric-grid-3"><Metric icon={Users} label="Registered" value={String(registered)} detail="Across active events" tone="blue" /><Metric icon={CheckCircle2} label="Checked in" value={String(attended)} detail="Verified attendance records" tone="green" /><Metric icon={Activity} label="Average attendance" value={`${Math.round(attended / Math.max(registered, 1) * 100)}%`} detail="From current registrations" tone="peach" /></div><div className="panel event-table-panel"><PanelHeading title="Attendance records" /><div className="table-scroll"><table className="data-table"><thead><tr><th>EVENT</th><th>PARTICIPANT</th><th>DATE</th><th>CHECK-IN TIME</th><th>STATUS</th></tr></thead><tbody>{attendance.map((record) => <tr key={record.id}><td><b>{events.find((event) => event.id === record.eventId)?.title ?? 'Club event'}</b></td><td>{record.memberName}</td><td>{formatDate(record.date, { month: 'short', day: 'numeric', year: 'numeric' })}</td><td>{record.checkInTime}</td><td><StatusBadge status="Verified" /></td></tr>)}</tbody></table></div>{attendance.length === 0 && <EmptyState title="No attendance recorded yet" detail="Verified participant check-ins will appear here." />}</div></div>
+function AttendancePage({ role, currentMember, registrations, attendance, events, onScan }: {
+  role: Role
+  currentMember: Member
+  registrations: Registration[]
+  attendance: AttendanceRecord[]
+  events: ClubEvent[]
+  onScan: () => void
+}) {
+  const activeRegistrations = registrations.filter((item) => item.status !== 'Cancelled')
+  const ownRegistrations = activeRegistrations.filter((item) => item.memberId === currentMember.id)
+  const ownAttendance = attendance.filter((item) => item.memberId === currentMember.id)
+  const registered = role === 'Participant' ? ownRegistrations.length : activeRegistrations.length
+  const attended = role === 'Participant' ? ownAttendance.length : attendance.length
+
+  if (role === 'Participant') return <div className="section-page">
+    <div className="attendance-callout"><div className="scan-mark"><QrCode size={24} /></div><div><b>Your event check-in codes</b><small>Only your active registrations are shown here. Present the matching code to event staff.</small></div></div>
+    <div className="metric-grid metric-grid-3">
+      <Metric icon={CheckCircle2} label="Events attended" value={String(attended).padStart(2, '0')} detail="Verified check-ins" tone="green" />
+      <Metric icon={Activity} label="Attendance rate" value={`${Math.round(attended / Math.max(registered, 1) * 100)}%`} detail={`${attended} of ${registered} registered events`} tone="blue" />
+      <Metric icon={TrendingUp} label="Club points" value={currentMember.points.toLocaleString()} detail="Earned from verified attendance" tone="peach" />
+    </div>
+    <div className="panel attendance-history">
+      <PanelHeading title="Your registered events" />
+      <div className="member-attendance-list">
+        {ownRegistrations.map((registration) => {
+          const event = events.find((item) => item.id === registration.eventId)
+          const checkedIn = ownAttendance.some((item) => item.registrationId === registration.id)
+          return <article className="member-attendance-card" key={registration.id}>
+            <div className="member-attendance-details">
+              <span className={`history-check ${checkedIn ? 'history-done' : ''}`}>{checkedIn ? <Check size={15} /> : <CalendarDays size={15} />}</span>
+              <div><b>{event?.title ?? 'Club event'}</b><small>{formatDate(registration.registeredAt)} · {checkedIn ? 'Attendance verified' : 'Registered · check-in pending'}</small></div>
+              <StatusBadge status={checkedIn ? 'Attended' : registration.status} />
+            </div>
+            {!checkedIn && registration.status === 'Confirmed' && <RegistrationQr registration={registration} />}
+          </article>
+        })}
+        {ownRegistrations.length === 0 && <EmptyState title="No event registrations yet" detail="Register for an event to see your check-in code and attendance history." />}
+      </div>
+    </div>
+  </div>
+
+  return <div className="section-page">
+    <div className="attendance-callout"><div className="scan-mark"><QrCode size={24} /></div><div><b>QR-based attendance verification</b><small>Scan a participant QR and confirm once. Only active event registrations can be checked in.</small></div><button className="button button-primary" onClick={onScan}><ScanLine size={15} /> Open scanner</button></div>
+    <div className="metric-grid metric-grid-3">
+      <Metric icon={Users} label="Registered" value={String(registered)} detail="Across active events" tone="blue" />
+      <Metric icon={CheckCircle2} label="Checked in" value={String(attended)} detail="Verified attendance records" tone="green" />
+      <Metric icon={Activity} label="Average attendance" value={`${Math.round(attended / Math.max(registered, 1) * 100)}%`} detail="From current registrations" tone="peach" />
+    </div>
+    <div className="panel event-table-panel">
+      <PanelHeading title="Attendance records" />
+      <div className="table-scroll"><table className="data-table"><thead><tr><th>EVENT</th><th>PARTICIPANT</th><th>DATE</th><th>CHECK-IN TIME</th><th>STATUS</th></tr></thead><tbody>{attendance.map((record) => <tr key={record.id}><td><b>{events.find((event) => event.id === record.eventId)?.title ?? 'Club event'}</b></td><td>{record.memberName}</td><td>{formatDate(record.date, { month: 'short', day: 'numeric', year: 'numeric' })}</td><td>{record.checkInTime}</td><td><StatusBadge status="Verified" /></td></tr>)}</tbody></table></div>
+      {attendance.length === 0 && <EmptyState title="No attendance recorded yet" detail="Verified participant check-ins will appear here." />}
+    </div>
+  </div>
+}
+
+function RegistrationQr({ registration }: { registration: Registration }) {
+  const [image, setImage] = useState('')
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let active = true
+    void import('qrcode')
+      .then(({ default: QRCode }) => QRCode.toDataURL(`BIMCLUB:${registration.id}`, { width: 180, margin: 1 }))
+      .then((dataUrl) => {
+        if (active) setImage(dataUrl)
+      })
+      .catch((qrError: unknown) => {
+        if (active) setError(qrError instanceof Error ? qrError.message : 'Unable to generate this check-in code.')
+      })
+    return () => {
+      active = false
+    }
+  }, [registration.id])
+
+  return <div className="member-registration-qr">
+    <div><b>Event check-in QR</b><small>Show this code to event staff</small></div>
+    {image ? <img src={image} alt={`Check-in QR for ${registration.name}`} /> : <span role="status">{error || 'Generating QR code…'}</span>}
+  </div>
 }
 function FilesPage({ role, files, onUpload, onDownload }: { role: Role; files: ClubFile[]; onUpload: (file: ClubFile) => void; onDownload: () => void }) { const [query, setQuery] = useState(''); const [category, setCategory] = useState('All categories'); const filtered = files.filter((file) => `${file.name} ${file.type} ${file.category} ${file.uploadedBy}`.toLowerCase().includes(query.toLowerCase()) && (category === 'All categories' || file.category === category)); return <div className="section-page"><div className="list-toolbar"><SearchField value={query} onChange={setQuery} placeholder="Search files" /><SelectField value={category} onChange={setCategory} options={['All categories', 'Notices', 'Event Documents', 'Club Guidelines', 'Reports', 'Other']} icon={<Filter size={15} />} /><span className="result-count">{filtered.length} files</span>{role !== 'Participant' && <label className="button button-primary file-upload-button"><Upload size={15} /> Upload file<input type="file" onChange={(event) => { const selected = event.target.files?.[0]; if (selected) onUpload({ id: `file-${Date.now()}`, name: selected.name, type: selected.name.split('.').pop()?.toUpperCase() ?? 'FILE', category: 'Other', uploadDate: '2026-10-05', uploadedBy: role === 'BOD' ? 'Sujan Karki' : 'Maya Adhikari', size: `${Math.max(1, Math.round(selected.size / 1024))} KB` }) }} /></label>}</div><div className="panel file-table-panel"><div className="table-scroll"><table className="data-table"><thead><tr><th>FILE NAME</th><th>FILE TYPE</th><th>CATEGORY</th><th>UPLOAD DATE</th><th>UPLOADED BY</th><th /></tr></thead><tbody>{filtered.map((file) => <tr key={file.id}><td><div className="file-cell"><span className="file-icon file-green"><FileText size={17} /></span><span><b>{file.name}</b><small>{file.size}</small></span></div></td><td>{file.type}</td><td><span className="folder-label">{file.category}</span></td><td>{formatDate(file.uploadDate, { month: 'short', day: 'numeric', year: 'numeric' })}</td><td>{file.uploadedBy}</td><td><button className="icon-button" aria-label={`Download ${file.name}`} onClick={onDownload}><ArrowDownToLine size={15} /></button></td></tr>)}</tbody></table></div>{filtered.length === 0 && <EmptyState title="No files match" detail="Try another search or category." />}</div><div className="storage-note"><ShieldCheck size={15} /> Club files are shared with current BIM Club members.</div></div> }
 function DonationsPage({ role, donations, onAdd }: { role: Role; donations: Donation[]; onAdd: () => void }) { const total = donations.filter((item) => item.status === 'Received').reduce((sum, item) => sum + item.amount, 0); return <div className="section-page"><div className="donation-summary"><div><span className="eyebrow">COMMUNITY SUPPORT</span><div className="donation-total">{formatMoney(total)}</div><p>Raised for BIM Club activities in 2026.</p></div><div className="donation-summary-icon"><Heart size={32} strokeWidth={1.3} /></div></div><div className="metric-grid metric-grid-3"><Metric icon={CircleDollarSign} label="Total received" value={formatMoney(total)} detail="This academic year" tone="green" /><Metric icon={Users} label="Contributors" value={String(donations.length)} detail="Students, alumni & faculty" tone="blue" /><Metric icon={CreditCard} label="Pending" value={formatMoney(donations.filter((item) => item.status === 'Pending').reduce((sum, item) => sum + item.amount, 0))} detail="Awaiting confirmation" tone="yellow" /></div><div className="panel event-table-panel"><div className="panel-heading panel-heading-padded"><h3>Donation ledger</h3>{role === 'Admin' && <button className="button button-quiet button-xs" onClick={onAdd}><Plus size={14} /> Add donation</button>}</div><div className="table-scroll"><table className="data-table"><thead><tr><th>CONTRIBUTOR</th><th>PURPOSE</th><th>DATE</th><th>AMOUNT</th><th>STATUS</th></tr></thead><tbody>{donations.map((item) => <tr key={item.id}><td><div className="member-cell"><span className="donor-avatar"><Heart size={14} /></span><span><b>{item.name}</b><small>BIM Club supporter</small></span></div></td><td>{item.purpose}</td><td>{formatDate(item.date, { month: 'short', day: 'numeric', year: 'numeric' })}</td><td><b>{formatMoney(item.amount)}</b></td><td><StatusBadge status={item.status} /></td></tr>)}</tbody></table></div></div><p className="disclaimer-note"><ShieldCheck size={14} /> Donation records are visible to club administrators and members.</p></div> }

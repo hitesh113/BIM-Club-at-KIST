@@ -4,6 +4,9 @@ import type { ActivityLogEntry, AttendanceRecord, ClubEvent, ClubFile, ClubSnaps
 
 export interface ClubRepository {
   loadSnapshot(): Promise<ClubSnapshot> | ClubSnapshot
+  registerForEvent(event: ClubEvent, member: Member): Promise<Registration>
+  cancelRegistration(registrationId: string): Promise<void>
+  recordAttendance(registration: Registration, verifiedBy: string): Promise<AttendanceRecord>
 }
 
 const asRole = (value: unknown): Role => {
@@ -60,6 +63,33 @@ export const mockClubRepository: ClubRepository = {
       activityLog: mockSnapshot.activityLog.map((item) => ({ ...item })),
     }
   },
+  async registerForEvent(event, member) {
+    return {
+      id: `reg-${Date.now()}`,
+      eventId: event.id,
+      memberId: member.id,
+      name: member.name,
+      email: member.email,
+      registeredAt: new Date().toISOString().slice(0, 10),
+      status: 'Confirmed',
+    }
+  },
+  async cancelRegistration() {},
+  async recordAttendance(registration, verifiedBy) {
+    const checkedInAt = new Date()
+    return {
+      id: `att-${Date.now()}`,
+      eventId: registration.eventId,
+      registrationId: registration.id,
+      memberId: registration.memberId,
+      memberName: registration.name,
+      date: checkedInAt.toISOString().slice(0, 10),
+      checkInTime: checkedInAt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+      status: 'Verified',
+      method: 'QR',
+      verifiedBy,
+    }
+  },
 }
 
 export const supabaseClubRepository: ClubRepository = {
@@ -68,7 +98,7 @@ export const supabaseClubRepository: ClubRepository = {
       return mockClubRepository.loadSnapshot()
     }
 
-    const [eventsResult, profilesResult, registrationsResult, attendanceResult, filesResult, donationsResult, notificationsResult, activityLogsResult] = await Promise.all([
+    const [eventsResult, profilesResult, registrationsResult, attendanceResult, filesResult, donationsResult, notificationsResult, activityLogsResult, pointsResult] = await Promise.all([
       supabase.from('events').select('*').order('event_date', { ascending: false }),
       supabase.from('profiles').select('*'),
       supabase.from('event_registrations').select('*'),
@@ -77,13 +107,27 @@ export const supabaseClubRepository: ClubRepository = {
       supabase.from('donations').select('*'),
       supabase.from('notifications').select('*'),
       supabase.from('activity_logs').select('*'),
+      supabase.from('point_transactions').select('member_id, points_delta'),
     ])
 
-    if (eventsResult.error || profilesResult.error || registrationsResult.error || attendanceResult.error || filesResult.error || donationsResult.error || notificationsResult.error || activityLogsResult.error) {
-      return mockClubRepository.loadSnapshot()
-    }
+    const failedQuery = [
+      eventsResult,
+      profilesResult,
+      registrationsResult,
+      attendanceResult,
+      filesResult,
+      donationsResult,
+      notificationsResult,
+      activityLogsResult,
+      pointsResult,
+    ].find((result) => result.error)
+    if (failedQuery?.error) throw failedQuery.error
 
     const profilesById = new Map<string, any>((profilesResult.data ?? []).map((profile: any) => [profile.id, profile]))
+    const pointsByMember = new Map<string, number>()
+    for (const transaction of pointsResult.data ?? []) {
+      pointsByMember.set(transaction.member_id, (pointsByMember.get(transaction.member_id) ?? 0) + Number(transaction.points_delta ?? 0))
+    }
 
     const events: ClubEvent[] = ((eventsResult.data ?? []) as any[]).map((event: any) => ({
       id: event.id,
@@ -106,7 +150,7 @@ export const supabaseClubRepository: ClubRepository = {
       email: profile.email ?? 'member@kist.edu.np',
       role: asRole(profile.role),
       joined: formatDate(profile.created_at ?? new Date().toISOString()),
-      points: Number(profile.points ?? 0),
+      points: pointsByMember.get(profile.id) ?? Number(profile.points ?? 0),
     }))
 
     const registrations: Registration[] = ((registrationsResult.data ?? []) as any[]).map((registration: any) => ({
@@ -128,7 +172,7 @@ export const supabaseClubRepository: ClubRepository = {
       date: formatDate(record.checked_in_at ?? record.date ?? new Date().toISOString()),
       checkInTime: new Date(record.checked_in_at ?? Date.now()).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }),
       status: 'Verified',
-      method: 'QR',
+      method: record.method === 'manual' ? 'Manual' : 'QR',
       verifiedBy: profilesById.get(record.verified_by)?.full_name ?? 'System',
     }))
 
@@ -179,6 +223,48 @@ export const supabaseClubRepository: ClubRepository = {
       files,
       notifications,
       activityLog,
+    }
+  },
+  async registerForEvent(event, member) {
+    if (!supabase || !hasSupabaseConfig) throw new Error('Supabase is not configured.')
+    const { data, error } = await supabase.rpc('register_for_event', { target_event_id: event.id })
+    if (error) throw error
+    if (typeof data !== 'string') throw new Error('The registration was saved without returning its ID.')
+    return {
+      id: data,
+      eventId: event.id,
+      memberId: member.id,
+      name: member.name,
+      email: member.email,
+      registeredAt: new Date().toISOString().slice(0, 10),
+      status: 'Confirmed',
+    }
+  },
+  async cancelRegistration(registrationId) {
+    if (!supabase || !hasSupabaseConfig) throw new Error('Supabase is not configured.')
+    const { error } = await supabase.rpc('cancel_event_registration', { target_registration_id: registrationId })
+    if (error) throw error
+  },
+  async recordAttendance(registration, verifiedBy) {
+    if (!supabase || !hasSupabaseConfig) throw new Error('Supabase is not configured.')
+    const { data, error } = await supabase.rpc('record_event_attendance', {
+      target_registration_id: registration.id,
+      checkin_method: 'qr',
+    })
+    if (error) throw error
+    if (typeof data !== 'string') throw new Error('Attendance was saved without returning its ID.')
+    const checkedInAt = new Date()
+    return {
+      id: data,
+      eventId: registration.eventId,
+      registrationId: registration.id,
+      memberId: registration.memberId,
+      memberName: registration.name,
+      date: checkedInAt.toISOString().slice(0, 10),
+      checkInTime: checkedInAt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+      status: 'Verified',
+      method: 'QR',
+      verifiedBy,
     }
   },
 }
