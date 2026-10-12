@@ -242,15 +242,60 @@ function App() {
     setNotificationOpen(false)
     setProfileOpen(false)
   }
+
+  const applyDemoAuth = (profile: AuthProfile) => {
+    const demoUser = {
+      id: profile.id,
+      email: profile.email ?? '',
+      app_metadata: {},
+      user_metadata: { full_name: profile.full_name },
+      aud: 'authenticated',
+      created_at: profile.created_at,
+      confirmed_at: profile.created_at,
+      last_sign_in_at: profile.created_at,
+      role: profile.role,
+      updated_at: profile.created_at,
+    } as User
+
+    setAuthUser(demoUser)
+    setAuthProfile(profile)
+    setRole(profile.role === 'admin' ? 'Admin' : profile.role === 'bod' ? 'BOD' : 'Participant')
+    setAuthLoading(false)
+    setPage('dashboard')
+    setAuthFeedback({ kind: 'success', message: 'Demo session active. You are signed in.' })
+    notify('Demo session active. You are signed in.')
+  }
+
   const signIn = async (email: string, password: string) => {
-    if (!supabase) {
-      setAuthFeedback({ kind: 'error', message: 'Supabase is not configured. Check the VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY environment variables.' })
+    const normalizedEmail = email.trim().toLowerCase()
+    if (!normalizedEmail || !password.trim()) {
+      setAuthFeedback({ kind: 'error', message: 'Enter your email and password to sign in.' })
       return
     }
+
+    if (!supabase) {
+      const member = members.find((item) => item.email.toLowerCase() === normalizedEmail)
+        ?? [...members].find((item) => item.email.toLowerCase().includes(normalizedEmail.split('@')[0]) || normalizedEmail.includes(item.name.toLowerCase().replaceAll(' ', '.')))
+      if (!member) {
+        setAuthFeedback({ kind: 'error', message: 'Supabase is not configured. Use a BIM Club demo member email or add the project environment variables.' })
+        return
+      }
+
+      const demoProfile: AuthProfile = {
+        id: member.id,
+        full_name: member.name,
+        email: member.email,
+        role: member.role.toLowerCase(),
+        created_at: new Date().toISOString(),
+      }
+      applyDemoAuth(demoProfile)
+      return
+    }
+
     setAuthBusy(true)
     setAuthFeedback(null)
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({ email: email.trim(), password })
+      const { data, error } = await supabase.auth.signInWithPassword({ email: normalizedEmail, password })
       if (error) {
         setAuthFeedback({ kind: 'error', message: error.message })
         return
@@ -269,14 +314,24 @@ function App() {
   }
 
   const signUp = async (fullName: string, email: string, password: string) => {
-    if (!supabase) {
-      setAuthFeedback({ kind: 'error', message: 'Supabase is not configured. Check the VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY environment variables.' })
-      return
-    }
     if (!fullName.trim()) {
       setAuthFeedback({ kind: 'error', message: 'Enter your full name to create an account.' })
       return
     }
+
+    if (!supabase) {
+      const profile: AuthProfile = {
+        id: `demo-${Date.now()}`,
+        full_name: fullName.trim(),
+        email: email.trim(),
+        role: 'participant',
+        created_at: new Date().toISOString(),
+      }
+      setMembers((items) => [{ id: profile.id, name: profile.full_name, email: profile.email ?? '', role: 'Participant', joined: profile.created_at.slice(0, 10), points: 0 }, ...items])
+      applyDemoAuth(profile)
+      return
+    }
+
     setAuthBusy(true)
     setAuthFeedback(null)
     try {
@@ -308,7 +363,15 @@ function App() {
   }
 
   const signOut = async () => {
-    if (!supabase) return
+    if (!supabase) {
+      setAuthUser(null)
+      setAuthProfile(null)
+      setRole(null)
+      setAuthFeedback({ kind: 'success', message: 'Demo session ended.' })
+      notify('Demo session ended.')
+      setPage('home')
+      return
+    }
     setAuthBusy(true)
     try {
       const { error } = await supabase.auth.signOut()
