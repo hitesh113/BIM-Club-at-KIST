@@ -68,6 +68,7 @@ export const buildEsewaFormData = ({
     merchant_code: merchantCode,
     product_service_charge: '0.00',
     product_service_charge_amount: '0.00',
+    product_delivery_charge: '0.00',
     success_url: successUrl,
     failure_url: failureUrl,
     signed_field_names: 'total_amount,transaction_uuid,product_code',

@@ -37,11 +37,13 @@ const createSignature = ({ totalAmount, transactionUuid, productCode, secret }) 
     throw new Error('ESEWA_MERCHANT_SECRET is not configured.')
   }
 
+  const message = `total_amount=${totalAmount},transaction_uuid=${transactionUuid},product_code=${productCode}`
   return crypto
     .createHmac('sha256', secret)
-    .update(`${totalAmount}|${transactionUuid}|${productCode}`)
+    .update(message)
     .digest('base64')
 }
+
 
 const getAuthenticatedUser = async (request) => {
   if (!supabaseAdmin) throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required for paid event registration.')
@@ -135,6 +137,7 @@ const buildEsewaResponse = ({
       merchant_code: merchantCodeValue,
       product_service_charge: '0.00',
       product_service_charge_amount: '0.00',
+      product_delivery_charge: '0.00',
       success_url: successUrl,
       failure_url: failureUrl,
       signed_field_names: 'total_amount,transaction_uuid,product_code',
@@ -165,6 +168,15 @@ app.post('/api/esewa/create-payment', (request, response) => {
           }
           const user = await getAuthenticatedUser(request)
           const transactionId = crypto.randomUUID()
+
+          // Clear any previous incomplete payment intent for this member & event to allow retrying
+          await supabaseAdmin
+            .from('event_payment_intents')
+            .delete()
+            .eq('event_id', String(payload.eventId))
+            .eq('member_id', user.id)
+            .is('completed_at', null)
+
           const { data: expectedAmount, error: intentError } = await supabaseAdmin.rpc('create_event_payment_intent', {
             target_event_id: String(payload.eventId),
             target_member_id: user.id,
@@ -185,8 +197,10 @@ app.post('/api/esewa/create-payment', (request, response) => {
           })
           response.json(result)
         } catch (error) {
+          const message = error?.message || (typeof error === 'string' ? error : 'Unable to prepare the eSewa event payment.')
+          console.error('Create payment error:', error)
           response.status(error?.status ?? 400).json({
-            message: error instanceof Error ? error.message : 'Unable to prepare the eSewa event payment.',
+            message,
           })
         }
       })()
