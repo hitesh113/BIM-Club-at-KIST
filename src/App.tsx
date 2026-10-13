@@ -742,7 +742,7 @@ function App() {
     const paymentState = (parameters.get('event_payment') ?? parameters.get('payment') ?? rawSearch.match(/[?&](?:event_payment|payment)=([^?&]+)/)?.[1] ?? '').trim().toLowerCase()
     const eventId = (parameters.get('event_id') ?? rawSearch.match(/[?&]event_id=([^?&]+)/)?.[1] ?? '').trim()
     const encodedData = parameters.get('data') ?? rawSearch.match(/[?&]data=([^&]+)/)?.[1] ?? ''
-    const paymentData = encodedData ? decodeURIComponent(encodedData.replace(/\+/g, ' ')) : ''
+    const paymentData = encodedData.replace(/ /g, '+')
 
     if (!paymentState && !encodedData) return
 
