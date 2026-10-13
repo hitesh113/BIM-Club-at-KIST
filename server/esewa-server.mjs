@@ -14,7 +14,7 @@ const merchantCode = process.env.ESEWA_MERCHANT_CODE ?? process.env.VITE_ESEWA_M
 const merchantSecret = process.env.ESEWA_MERCHANT_SECRET ?? ''
 const supabaseUrl = process.env.SUPABASE_URL ?? process.env.VITE_SUPABASE_URL ?? ''
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? ''
-const appBaseUrl = process.env.APP_BASE_URL ?? 'http://localhost:5173'
+const appBaseUrl = (process.env.APP_BASE_URL ?? 'http://localhost:5173').replace(/\/+$/, '')
 const productCode = process.env.ESEWA_PRODUCT_CODE || process.env.VITE_ESEWA_PRODUCT_CODE || merchantCode || 'BIMCLUB'
 const supabaseAdmin = supabaseUrl && supabaseServiceRoleKey
   ? createClient(supabaseUrl, supabaseServiceRoleKey, { auth: { persistSession: false, autoRefreshToken: false } })
@@ -81,17 +81,29 @@ const parseEsewaCallback = (encodedData) => {
 
 const verifyEsewaCallback = (payload) => {
   const signedFieldNames = String(payload.signed_field_names ?? '').split(',')
-  const allowedFields = new Set(['transaction_code', 'status', 'total_amount', 'transaction_uuid', 'product_code'])
+  const allowedFields = new Set([
+    'transaction_code',
+    'status',
+    'total_amount',
+    'transaction_uuid',
+    'product_code',
+    'signed_field_names',
+  ])
   const requiredFields = ['status', 'total_amount', 'transaction_uuid', 'product_code']
   if (
     signedFieldNames.length !== new Set(signedFieldNames).size
-    || signedFieldNames.some((field) => !allowedFields.has(field) || typeof payload[field] !== 'string')
+    || signedFieldNames.some((field) => {
+      const value = payload[field]
+      return !allowedFields.has(field)
+        || (typeof value !== 'string' && typeof value !== 'number')
+        || (typeof value === 'number' && !Number.isFinite(value))
+    })
     || requiredFields.some((field) => !signedFieldNames.includes(field))
   ) {
     return false
   }
 
-  const canonical = signedFieldNames.map((field) => `${field}=${payload[field]}`).join(',')
+  const canonical = signedFieldNames.map((field) => `${field}=${String(payload[field])}`).join(',')
   const expectedSignature = crypto.createHmac('sha256', merchantSecret).update(canonical).digest('base64')
   const providedSignature = String(payload.signature ?? '')
   return providedSignature.length === expectedSignature.length
@@ -190,7 +202,7 @@ app.post('/api/esewa/create-payment', (request, response) => {
             donorName: String(payload.donorName || 'BIM Club member'),
             merchantCodeValue: merchantCode,
             productCodeValue: productCode,
-            successUrl: `${appBaseUrl}/?event_payment=success&event_id=${encodeURIComponent(String(payload.eventId))}`,
+            successUrl: `${appBaseUrl}/`,
             failureUrl: `${appBaseUrl}/?event_payment=failed&event_id=${encodeURIComponent(String(payload.eventId))}`,
             transactionId,
             environment: String(payload.environment ?? process.env.VITE_ESEWA_ENV ?? 'sandbox').toLowerCase() === 'production' ? 'production' : 'sandbox',

@@ -17,6 +17,7 @@ export interface ClubRepository {
   loadProfilePhoto(photoPath: string | null): Promise<string | null>
   createEvent(event: Omit<ClubEvent, 'id'>): Promise<ClubEvent>
   updateEvent(id: string, event: Omit<ClubEvent, 'id'>): Promise<ClubEvent>
+  deleteEvent(id: string, role: Role): Promise<void>
   updateEventStatus(event: ClubEvent, status: ClubEvent['status']): Promise<ClubEvent>
   registerForEvent(event: ClubEvent, member: Member): Promise<Registration>
   cancelRegistration(registrationId: string): Promise<void>
@@ -171,6 +172,11 @@ export const mockClubRepository: ClubRepository = {
   },
   async updateEvent(id, event) {
     return { ...event, id }
+  },
+  async deleteEvent(id, role) {
+    if (role !== 'Admin') throw new Error('Only administrators can delete events.')
+    const index = mockSnapshot.events.findIndex((event) => event.id === id)
+    if (index >= 0) mockSnapshot.events.splice(index, 1)
   },
   async updateEventStatus(event, status) {
     return { ...event, status }
@@ -527,6 +533,18 @@ export const supabaseClubRepository: ClubRepository = {
       .single()
     if (error) throw error
     return mapClubEvent(data)
+  },
+  async deleteEvent(id, role) {
+    if (role !== 'Admin') throw new Error('Only administrators can delete events.')
+    if (!supabase || !hasSupabaseConfig) {
+      return mockClubRepository.deleteEvent(id, role)
+    }
+
+    const { error } = await supabase
+      .from('events')
+      .delete()
+      .eq('id', id)
+    if (error) throw error
   },
   async updateEventStatus(event, status) {
     if (!supabase || !hasSupabaseConfig) {

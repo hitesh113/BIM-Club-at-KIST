@@ -34,7 +34,7 @@ Run `npm run test:supabase` to check project reachability. The temporary test se
 
 ## eSewa event registration
 
-Admins and BOD users can create free events or set a paid registration fee in NPR. Participants are redirected to eSewa to pay for paid events; a seat is registered only after the backend validates eSewa's signed completion callback. The payment API checks the signed-in member, reserves capacity, and confirms payment using a server-only Supabase service-role key. The browser never receives the merchant secret or service-role key.
+Admins and BOD users can create free events or set a paid registration fee in NPR. Participants are redirected to eSewa to pay for paid events; a seat is registered only after the backend validates eSewa's signed completion callback using the callback's `signed_field_names` order (including `signed_field_names` itself when eSewa includes it). The payment API checks the signed-in member, reserves capacity, and confirms payment using a server-only Supabase service-role key. The browser never receives the merchant secret or service-role key.
 
 ```env
 VITE_ESEWA_ENV=sandbox
@@ -48,9 +48,9 @@ APP_BASE_URL=http://localhost:5173
 SUPABASE_SERVICE_ROLE_KEY=replace-with-server-only-service-role-key
 ```
 
-The eSewa server also reads `VITE_ESEWA_MERCHANT_CODE` and `VITE_ESEWA_PRODUCT_CODE` from the local environment unless `ESEWA_MERCHANT_CODE` or `ESEWA_PRODUCT_CODE` is set explicitly. Keep `SUPABASE_SERVICE_ROLE_KEY` and the eSewa secret only in the server environment; never expose them through a `VITE_` variable or commit populated values. Set `APP_BASE_URL` to the frontend's deployed HTTPS origin in production.
+The eSewa server also reads `VITE_ESEWA_MERCHANT_CODE` and `VITE_ESEWA_PRODUCT_CODE` from the local environment unless `ESEWA_MERCHANT_CODE` or `ESEWA_PRODUCT_CODE` is set explicitly. Keep `SUPABASE_SERVICE_ROLE_KEY` and the eSewa secret only in the server environment; never expose them through a `VITE_` variable or commit populated values. Set `APP_BASE_URL` to the frontend's deployed HTTPS origin in production. Paid-event success callbacks return to the root URL without query parameters because eSewa appends its signed `data` parameter; the backend identifies the event from the verified transaction.
 
-Run the full local stack with `npm run dev:all` so the frontend and the `/api/esewa/*` routes are available together. Configure eSewa sandbox/live merchant credentials and apply migration `006_paid_event_registration.sql` after the existing migrations before creating paid events.
+Run the full local stack with `npm run dev:all` so the frontend and the `/api/esewa/*` routes are available together. Configure eSewa sandbox/live merchant credentials and apply `supabase/migrations/007_paid_event_registration.sql` after migrations `001` through `006` before creating or editing events. This migration adds the `is_paid` and `price` fields that the event editor saves, in addition to paid-registration support.
 
 ## Authentication
 
@@ -69,6 +69,7 @@ Workspace roles come from `public.profiles.role`; there is no client-side role s
 ## Current modules
 
 - **QR-based attendance verification:** Participants receive an individual QR code for each active registration. BOD/Admin users can use the device camera to decode those codes through `html5-qrcode`; the server validates the active registration, blocks duplicate check-ins, records attendance, and updates the registration and points atomically.
+- **Event management:** Admins and BOD users can create and edit events; only admins can permanently delete events. Deleting an event also removes its registrations and attendance records through database cascades.
 - **File management:** Staff uploads binary files to the private `club-private-files` Storage bucket and records metadata in `public.files`. Members can preview PDFs, images, text-based files, DOCX text, and XLSX worksheets in the site and download originals; other formats remain downloadable.
 - **Donations:** Participants can record pending NPR contributions. Admin-recorded donations are stored in the live ledger; this does not process payments.
 - **Attendance, reports, and leaderboard:** Metrics and charts are derived from current Supabase records.

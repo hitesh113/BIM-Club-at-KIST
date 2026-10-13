@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Activity, ArrowDownToLine, ArrowRight, ArrowUpRight, Bell, CalendarDays,
+  Activity, ArrowDownToLine, ArrowRight, ArrowUp, ArrowUpRight, Bell, CalendarDays,
   Check, CheckCircle2, ChevronDown, ChevronLeft, Clock, CreditCard, FileText,
   Filter, Heart, LayoutDashboard, LogOut, MapPin, Menu, Plus, QrCode, Search,
   Settings2, ShieldCheck, Sparkles, TrendingUp, Users, X, Upload,
@@ -71,6 +71,17 @@ const navigation: Record<Role, { label: string; page: Page; icon: typeof LayoutD
 const formatDate = (value: string, options: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric', year: 'numeric' }) =>
   new Intl.DateTimeFormat('en-US', options).format(new Date(`${value}T12:00:00`))
 const formatMoney = (value: number) => `NPR ${value.toLocaleString('en-NP')}`
+const describeError = (error: unknown, fallback: string) => {
+  if (error instanceof Error) return error.message
+  if (typeof error !== 'object' || error === null) return fallback
+
+  const details = error as Record<string, unknown>
+  const message = typeof details.message === 'string' ? details.message : ''
+  const code = typeof details.code === 'string' ? ` (${details.code})` : ''
+  const detail = typeof details.details === 'string' ? ` ${details.details}` : ''
+  const hint = typeof details.hint === 'string' ? ` ${details.hint}` : ''
+  return message ? `${message}${code}${detail}${hint}` : fallback
+}
 
 function App() {
   const [snapshot, setSnapshot] = useState<ClubSnapshot>(() => mockClubRepository.loadSnapshot() as ClubSnapshot)
@@ -623,6 +634,24 @@ function App() {
   }
   const saveEvent = async (form: EventForm) => {
     if (!form.title.trim()) return notify('Add an event title before saving')
+    if (!form.date || !form.registrationDeadline || form.registrationDeadline > form.date) {
+      const message = 'The registration deadline must be on or before the event date.'
+      setEventMutationError(message)
+      notify(message)
+      return
+    }
+    if (!form.startTime || !form.endTime || form.endTime <= form.startTime) {
+      const message = 'The event end time must be later than its start time.'
+      setEventMutationError(message)
+      notify(message)
+      return
+    }
+    if (!form.location.trim() || !Number.isInteger(form.maxParticipants) || form.maxParticipants < 1) {
+      const message = 'Enter a location and a whole-number participant capacity greater than zero.'
+      setEventMutationError(message)
+      notify(message)
+      return
+    }
     if (form.isPaid && (!Number.isFinite(form.price) || Number(form.price) <= 0)) {
       const message = 'Enter a valid positive registration fee for this paid event.'
       setEventMutationError(message)
@@ -657,7 +686,7 @@ function App() {
         ? `Event saved, but its notification failed: ${notificationIssue}`
         : created ? 'Event created' : 'Event changes saved')
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Could not save the event.'
+      const message = describeError(error, 'Could not save the event.')
       setEventMutationError(message)
       notify(`Event was not saved: ${message}`)
     } finally {
@@ -686,6 +715,25 @@ function App() {
       const message = error instanceof Error ? error.message : 'Could not update the event status.'
       setEventMutationError(message)
       notify(`Event status was not saved: ${message}`)
+    }
+  }
+  const deleteEvent = async (event: ClubEvent) => {
+    if (role !== 'Admin') return
+    try {
+      await clubRepository.deleteEvent(event.id, role)
+      setEvents((items) => items.filter((item) => item.id !== event.id))
+      setSnapshot((current) => ({ ...current, events: current.events.filter((item) => item.id !== event.id) }))
+      try {
+        await refreshSnapshot()
+      } catch (error) {
+        notify(`Event deleted, but club data could not be refreshed: ${describeError(error, 'Unknown refresh error.')}`)
+        return
+      }
+      notify('Event deleted')
+    } catch (error) {
+      const message = describeError(error, 'Could not delete the event.')
+      setEventMutationError(message)
+      notify(`Event was not deleted: ${message}`)
     }
   }
   const register = async (event: ClubEvent) => {
@@ -741,7 +789,7 @@ function App() {
     const parameters = new URLSearchParams(rawSearch)
     const paymentState = (parameters.get('event_payment') ?? parameters.get('payment') ?? rawSearch.match(/[?&](?:event_payment|payment)=([^?&]+)/)?.[1] ?? '').trim().toLowerCase()
     const eventId = (parameters.get('event_id') ?? rawSearch.match(/[?&]event_id=([^?&]+)/)?.[1] ?? '').trim()
-    const encodedData = parameters.get('data') ?? rawSearch.match(/[?&]data=([^&]+)/)?.[1] ?? ''
+    const encodedData = parameters.get('data') ?? ''
     const paymentData = encodedData.replace(/ /g, '+')
 
     if (!paymentState && !encodedData) return
@@ -817,7 +865,7 @@ function App() {
         <main className="page-content">{liveDataError && <div className="event-data-error" role="alert"><span><b>Live club data could not be refreshed.</b><small>{liveDataError}</small></span></div>}<PageHeading page={page} role={role} onCreate={() => startEventEditor()} onNavigate={navigate} />{renderContent()}</main>
       </div>
     </>}
-    {publicMode && <main className="public-main"><div className="public-back-row"><button className="icon-button back-button" aria-label="Go back" title="Go back" disabled={!canGoBack} onClick={goBack}><ChevronLeft size={16} /></button></div>{renderContent()}</main>}
+    {publicMode && <main className="public-main">{page !== 'home' && <div className="public-back-row"><button className="icon-button back-button" aria-label="Go back" title="Go back" disabled={!canGoBack} onClick={goBack}><ChevronLeft size={16} /></button></div>}{renderContent()}</main>}
     {eventModal && <EventEditor event={editingEvent} form={eventForm} setForm={setEventForm} saving={eventSaving} error={eventMutationError} onClose={() => setEventModal(false)} onSave={saveEvent} />}
     {donationModal && <DonationEditor
       role={donationRole}
@@ -897,7 +945,7 @@ function App() {
         onCancel={registration?.status === 'Confirmed' ? () => void cancelRegistration(registration.id) : undefined}
       />
     }
-    if (page === 'manage-events') return <ManageEvents events={filteredEvents} loading={eventsLoading} error={eventsError} mutationError={eventMutationError} onRetry={retryEvents} countFor={countFor} search={search} setSearch={setSearch} category={category} setCategory={setCategory} statusFilter={statusFilter} setStatusFilter={setStatusFilter} onEdit={startEventEditor} onCreate={() => startEventEditor()} onEvent={openEvent} onStatus={setEventStatus} />
+    if (page === 'manage-events') return <ManageEvents role={role} events={filteredEvents} loading={eventsLoading} error={eventsError} mutationError={eventMutationError} onRetry={retryEvents} countFor={countFor} search={search} setSearch={setSearch} category={category} setCategory={setCategory} statusFilter={statusFilter} setStatusFilter={setStatusFilter} onEdit={startEventEditor} onCreate={() => startEventEditor()} onEvent={openEvent} onStatus={setEventStatus} onDelete={deleteEvent} />
     if (page === 'registrations') return <RegistrationsPage events={events} registrations={registrations} query={query} setQuery={setQuery} />
     if (page === 'attendance') return <AttendancePage role={role} currentMember={currentMember} registrations={registrations} attendance={attendance} events={events} onScan={() => setScannerOpen(true)} />
     if (page === 'files') return <FilesPage
@@ -987,7 +1035,7 @@ function PublicFooter({ onNavigate }: { onNavigate: (page: Page) => void }) {
         <a className="footer-website-link" href="https://kist.edu.np/" target="_blank" rel="noopener noreferrer"><Globe size={15} /> Official Website <ArrowUpRight size={13} /></a>
       </section>
     </div>
-    <div className="footer-bottom"><span>© BIM Club, KIST College of Management. All rights reserved.</span></div>
+    <div className="footer-bottom"><span>© BIM Club, KIST College of Management. All rights reserved.</span><button className="footer-back-to-top" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}><ArrowUp size={14} /> Back to top</button></div>
   </footer>
 }
 function LandingPage({ events, onNavigate, onEvent }: { events: ClubEvent[]; onNavigate: (page: Page) => void; onEvent: (id: string) => void }) {
@@ -1481,12 +1529,16 @@ function PanelHeading({ title, action, onAction }: { title: string; action?: str
 function CompactEvent({ event, onClick }: { event: ClubEvent; onClick: () => void }) { const date = new Date(`${event.date}T12:00:00`); return <button className="compact-event" onClick={onClick}><span className="compact-date"><b>{date.getDate()}</b><small>{date.toLocaleDateString('en-US', { month: 'short' }).toUpperCase()}</small></span><span className="compact-event-body"><b>{event.title}</b><small><Clock size={12} /> {event.startTime} <span>·</span> <MapPin size={12} /> {event.location}</small></span><StatusBadge status={event.status} /></button> }
 function ActivityItem({ icon: Icon, title, detail, tone }: { icon: typeof Activity; title: string; detail: string; tone: string }) { return <div className="activity-item"><span className={`activity-icon tone-${tone}`}><Icon size={15} /></span><div><b>{title}</b><small>{detail}</small></div></div> }
 function StatusBadge({ status }: { status: EventStatus | Registration['status'] | Donation['status'] | AttendanceRecord['status'] | `${number}%` }) { return <span className={`status-badge badge-${String(status).toLowerCase().replaceAll(' ', '-')}`}><i />{status}</span> }
-function ManageEvents({ events, loading, error, mutationError, onRetry, countFor, search, setSearch, category, setCategory, statusFilter, setStatusFilter, onEdit, onCreate, onEvent, onStatus }: { events: ClubEvent[]; loading: boolean; error: string; mutationError: string; onRetry: () => void; countFor: (id: string) => number; search: string; setSearch: (value: string) => void; category: string; setCategory: (value: string) => void; statusFilter: string; setStatusFilter: (value: string) => void; onEdit: (event: ClubEvent) => void; onCreate: () => void; onEvent: (id: string) => void; onStatus: (id: string, status: EventStatus) => Promise<void> }) {
+function ManageEvents({ role, events, loading, error, mutationError, onRetry, countFor, search, setSearch, category, setCategory, statusFilter, setStatusFilter, onEdit, onCreate, onEvent, onStatus, onDelete }: { role: Role; events: ClubEvent[]; loading: boolean; error: string; mutationError: string; onRetry: () => void; countFor: (id: string) => number; search: string; setSearch: (value: string) => void; category: string; setCategory: (value: string) => void; statusFilter: string; setStatusFilter: (value: string) => void; onEdit: (event: ClubEvent) => void; onCreate: () => void; onEvent: (id: string) => void; onStatus: (id: string, status: EventStatus) => Promise<void>; onDelete: (event: ClubEvent) => Promise<void> }) {
+  const confirmDelete = async (event: ClubEvent) => {
+    if (role !== 'Admin' || !window.confirm(`Permanently delete "${event.title}"? Its registrations and attendance records will also be removed.`)) return
+    await onDelete(event)
+  }
   return <div className="section-page">
     <div className="list-toolbar"><SearchField value={search} onChange={setSearch} placeholder="Search events" /><SelectField value={category} onChange={setCategory} options={['All categories', 'Workshop', 'Design', 'Competition', 'Seminar', 'Community']} icon={<Filter size={15} />} /><SelectField value={statusFilter} onChange={setStatusFilter} options={['All statuses', 'Draft', 'Published', 'Registration Open', 'Registration Closed', 'Completed', 'Cancelled']} /><span className="result-count">{events.length} events</span><button className="button button-primary toolbar-create" onClick={onCreate}><Plus size={15} /> New event</button></div>
     <EventDataState loading={loading} error={error} mutationError={mutationError} onRetry={onRetry} />
     {!loading && !error && <div className="panel event-table-panel">
-      <div className="table-scroll"><table className="data-table"><thead><tr><th>EVENT</th><th>DATE & LOCATION</th><th>REGISTRATIONS</th><th>STATUS</th><th /></tr></thead><tbody>{events.map((event) => { const count = countFor(event.id); return <tr key={event.id}><td><button className="event-table-name" onClick={() => onEvent(event.id)}><img src={event.image} alt="" /><span><b>{event.title}</b><small>{event.category}</small></span></button></td><td><b>{formatDate(event.date, { month: 'short', day: 'numeric', year: 'numeric' })}</b><small className="table-secondary"><MapPin size={12} /> {event.location}</small></td><td><div className="registration-progress"><span>{count} / {event.maxParticipants}</span><i><b style={{ width: `${Math.min(100, count / event.maxParticipants * 100)}%` }} /></i></div></td><td><StatusBadge status={event.status} /></td><td><div className="table-actions"><button className="icon-button" aria-label={`Edit ${event.title}`} onClick={() => onEdit(event)}><Settings2 size={15} /></button><button className="icon-button" aria-label={`Toggle registration for ${event.title}`} onClick={() => void onStatus(event.id, event.status === 'Registration Open' ? 'Registration Closed' : 'Registration Open')}><ArrowUpRight size={15} /></button></div></td></tr> })}</tbody></table></div>
+      <div className="table-scroll"><table className="data-table"><thead><tr><th>EVENT</th><th>DATE & LOCATION</th><th>REGISTRATIONS</th><th>STATUS</th><th /></tr></thead><tbody>{events.map((event) => { const count = countFor(event.id); return <tr key={event.id}><td><button className="event-table-name" onClick={() => onEvent(event.id)}><img src={event.image} alt="" /><span><b>{event.title}</b><small>{event.category}</small></span></button></td><td><b>{formatDate(event.date, { month: 'short', day: 'numeric', year: 'numeric' })}</b><small className="table-secondary"><MapPin size={12} /> {event.location}</small></td><td><div className="registration-progress"><span>{count} / {event.maxParticipants}</span><i><b style={{ width: `${Math.min(100, count / event.maxParticipants * 100)}%` }} /></i></div></td><td><StatusBadge status={event.status} /></td><td><div className="table-actions"><button className="icon-button" aria-label={`Edit ${event.title}`} onClick={() => onEdit(event)}><Settings2 size={15} /></button><button className="icon-button" aria-label={`Toggle registration for ${event.title}`} onClick={() => void onStatus(event.id, event.status === 'Registration Open' ? 'Registration Closed' : 'Registration Open')}><ArrowUpRight size={15} /></button>{role === 'Admin' && <button className="icon-button file-delete-button" aria-label={`Delete ${event.title}`} title="Delete event" onClick={() => void confirmDelete(event)}><Trash2 size={15} /></button>}</div></td></tr> })}</tbody></table></div>
       {events.length === 0 && <EmptyState title="No events found" detail="Try another search or create a new event." action="Create event" onAction={onCreate} />}
     </div>}
   </div>
