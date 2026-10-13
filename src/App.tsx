@@ -12,6 +12,7 @@ import {
 } from 'recharts'
 import type { Session, User } from '@supabase/supabase-js'
 import { supabase } from './lib/supabase'
+import { completeEsewaEventPayment, hasEsewaConfig, submitEsewaPayment } from './lib/esewa'
 import { clubRepository, mockClubRepository } from './services/clubRepository'
 import type { ActivityLogEntry, AttendanceRecord, ClubEvent, ClubFile, ClubSnapshot, Donation, EventStatus, Member, Notification, Registration, Role } from './types'
 import './App.css'
@@ -32,6 +33,7 @@ const blankEvent: EventForm = {
   title: '', description: '', date: todayDate(), startTime: '10:00', endTime: '13:00',
   location: 'KIST College of Management', category: 'Workshop', image: '',
   maxParticipants: 50, registrationDeadline: todayDate(), status: 'Draft',
+  isPaid: false, price: undefined,
 }
 const pageTitles: Record<Page, string> = {
   home: 'Welcome to BIM Club', about: 'About the club', events: 'Events', 'event-detail': 'Event details',
@@ -201,6 +203,7 @@ function App() {
   const [editingEvent, setEditingEvent] = useState<ClubEvent | null>(null)
   const [eventForm, setEventForm] = useState<EventForm>(blankEvent)
   const [scannerOpen, setScannerOpen] = useState(false)
+  const handledEventPayment = useRef(false)
   const donationRole = role ?? 'Participant'
 
   const fallbackMember = snapshot.members[0]
@@ -620,6 +623,12 @@ function App() {
   }
   const saveEvent = async (form: EventForm) => {
     if (!form.title.trim()) return notify('Add an event title before saving')
+    if (form.isPaid && (!Number.isFinite(form.price) || Number(form.price) <= 0)) {
+      const message = 'Enter a valid positive registration fee for this paid event.'
+      setEventMutationError(message)
+      notify(message)
+      return
+    }
     setEventSaving(true)
     setEventMutationError('')
     try {
@@ -689,6 +698,24 @@ function App() {
     if (event.status !== 'Registration Open' || count >= event.maxParticipants || event.registrationDeadline < todayDate() || event.date < todayDate()) return notify('Registration is closed or this event is full')
     if (myRegistrations.some((item) => item.eventId === event.id)) return notify('You are already registered for this event')
     try {
+      if (event.isPaid) {
+        if (!event.price || event.price <= 0) throw new Error('This paid event does not have a valid registration price. Contact the event organizer.')
+        if (!supabase || !hasEsewaConfig) throw new Error('eSewa payments are not configured. Please contact the event organizer.')
+        const { data: { session }, error } = await supabase.auth.getSession()
+        if (error) throw error
+        if (!session?.access_token) throw new Error('Your session expired. Sign in again before paying for this event.')
+        const callbackBase = `${window.location.origin}/?event_payment=`
+        await submitEsewaPayment({
+          amount: event.price,
+          purpose: `Event registration: ${event.title}`,
+          donorName: currentMember.name,
+          eventId: event.id,
+          accessToken: session.access_token,
+          successUrl: `${callbackBase}success&event_id=${encodeURIComponent(event.id)}`,
+          failureUrl: `${callbackBase}failed&event_id=${encodeURIComponent(event.id)}`,
+        })
+        return
+      }
       const registration = await clubRepository.registerForEvent(event, currentMember)
       setRegistrations((items) => [registration, ...items])
       if (supabase) {
@@ -707,6 +734,46 @@ function App() {
       notify(error instanceof Error ? error.message : 'Event registration failed. Please try again.')
     }
   }
+  useEffect(() => {
+    const parameters = new URLSearchParams(window.location.search)
+    const paymentState = parameters.get('event_payment')
+    if (!paymentState || authLoading || handledEventPayment.current) return
+    const eventId = parameters.get('event_id') ?? ''
+    const paymentData = (parameters.get('data') ?? '').replaceAll(' ', '+')
+
+    if (paymentState !== 'success') {
+      handledEventPayment.current = true
+      window.history.replaceState({}, '', `${window.location.pathname}${window.location.hash}`)
+      window.setTimeout(() => notify('eSewa payment was cancelled or not completed. You have not been registered.'), 0)
+      return
+    }
+    if (!authUser || !supabase) {
+      window.setTimeout(() => notify('Sign in with the same account to confirm your event payment. Your payment confirmation is being kept for after sign-in.'), 0)
+      return
+    }
+    handledEventPayment.current = true
+    window.history.replaceState({}, '', `${window.location.pathname}${window.location.hash}`)
+    if (!paymentData) {
+      window.setTimeout(() => notify('eSewa returned without payment confirmation. Your registration was not completed.'), 0)
+      return
+    }
+
+    void (async () => {
+      try {
+        const { data: { session }, error } = await supabase.auth.getSession()
+        if (error) throw error
+        if (!session?.access_token) throw new Error('Your session expired. Sign in again to confirm this payment.')
+        const result = await completeEsewaEventPayment(paymentData, session.access_token)
+        if (eventId && result.eventId !== eventId) throw new Error('The payment confirmation did not match the selected event.')
+        await refreshSnapshot()
+        setSelectedId(result.eventId)
+        setPage('event-detail')
+        notify('Payment confirmed and your event registration is complete.')
+      } catch (error) {
+        notify(error instanceof Error ? error.message : 'Unable to confirm the eSewa payment.')
+      }
+    })()
+  }, [authLoading, authUser])
   const cancelRegistration = async (registrationId: string) => {
     const registration = myRegistrations.find((item) => item.id === registrationId)
     if (!registration || registration.status !== 'Confirmed') {
@@ -1171,7 +1238,7 @@ function EventDetails({ event, registrations, isRegistered = false, registration
   const count = registrations.filter((item) => item.eventId === event.id && item.status !== 'Cancelled').length
   const available = Math.max(0, event.maxParticipants - count)
   const open = event.status === 'Registration Open' && available > 0 && event.registrationDeadline >= todayDate() && event.date >= todayDate()
-  return <div className="detail-page"><div className="detail-layout"><div className="detail-main"><div className="detail-image"><img src={event.image} alt="" /><span className="category-pill">{event.category}</span></div><div className="detail-kicker"><StatusBadge status={event.status} /> <span>·</span> {formatDate(event.date, { month: 'long', day: 'numeric', year: 'numeric' })}</div><h1>{event.title}</h1><p className="detail-description">{event.description}</p><div className="detail-facts"><div><CalendarDays size={18} /><span><small>DATE & TIME</small><b>{formatDate(event.date, { weekday: 'long', month: 'long', day: 'numeric' })}</b><span>{event.startTime} – {event.endTime}</span></span></div><div><MapPin size={18} /><span><small>LOCATION</small><b>{event.location}</b><span>Kathmandu, Nepal</span></span></div><div><Users size={18} /><span><small>CAPACITY</small><b>{event.maxParticipants} seats</b><span>Registration closes {formatDate(event.registrationDeadline, { month: 'long', day: 'numeric' })}</span></span></div></div><div className="detail-about"><h2>About this event</h2><p>{event.description} Bring your laptop, your questions, and an open mind. All BIM students are welcome; no prior experience is needed.</p></div></div><aside className="registration-card"><div className="eyebrow">SAVE YOUR SEAT</div><h3>{formatDate(event.date, { month: 'long', day: 'numeric' })}</h3><p>{event.startTime} – {event.endTime}</p><div className="capacity-line"><div><b>{event.maxParticipants}</b><span> seats</span></div><small>{count} registered</small></div><div className="capacity-track"><span style={{ width: `${Math.min(100, count / event.maxParticipants * 100)}%` }} /></div><div className="seat-count"><span><i />{available} seats available</span><b>{Math.round(count / event.maxParticipants * 100)}%</b></div>{isRegistered ? <><div className="registered-note"><CheckCircle2 size={17} /><span><b>You’re on the list</b><small>{registrationStatus === 'Attended' ? 'Attendance verified' : 'Registration confirmed'}</small></span></div>{onCancel && <button className="button button-cancel" onClick={onCancel}>Cancel registration</button>}</> : <button className={`button ${open ? 'button-primary' : 'button-disabled'}`} disabled={!open} onClick={onRegister}>{open ? 'Register for event' : available === 0 ? 'Event is full' : 'Registration closed'} {open && <ArrowRight size={15} />}</button>}<small className="registration-note">No fee · Open to KIST students</small></aside></div></div>
+  return <div className="detail-page"><div className="detail-layout"><div className="detail-main"><div className="detail-image"><img src={event.image} alt="" /><span className="category-pill">{event.category}</span></div><div className="detail-kicker"><StatusBadge status={event.status} /> <span>·</span> {formatDate(event.date, { month: 'long', day: 'numeric', year: 'numeric' })}</div><h1>{event.title}</h1><p className="detail-description">{event.description}</p><div className="detail-facts"><div><CalendarDays size={18} /><span><small>DATE & TIME</small><b>{formatDate(event.date, { weekday: 'long', month: 'long', day: 'numeric' })}</b><span>{event.startTime} – {event.endTime}</span></span></div><div><MapPin size={18} /><span><small>LOCATION</small><b>{event.location}</b><span>Kathmandu, Nepal</span></span></div><div><Users size={18} /><span><small>CAPACITY</small><b>{event.maxParticipants} seats</b><span>Registration closes {formatDate(event.registrationDeadline, { month: 'long', day: 'numeric' })}</span></span></div></div><div className="detail-about"><h2>About this event</h2><p>{event.description} Bring your laptop, your questions, and an open mind. All BIM students are welcome; no prior experience is needed.</p></div></div><aside className="registration-card"><div className="eyebrow">{event.isPaid ? 'PAID REGISTRATION' : 'SAVE YOUR SEAT'}</div><h3>{event.isPaid ? formatMoney(event.price ?? 0) : 'Free event'}</h3><p>{formatDate(event.date, { month: 'long', day: 'numeric' })} · {event.startTime} – {event.endTime}</p><div className="capacity-line"><div><b>{event.maxParticipants}</b><span> seats</span></div><small>{count} registered</small></div><div className="capacity-track"><span style={{ width: `${Math.min(100, count / event.maxParticipants * 100)}%` }} /></div><div className="seat-count"><span><i />{available} seats available</span><b>{Math.round(count / event.maxParticipants * 100)}%</b></div>{isRegistered ? <><div className="registered-note"><CheckCircle2 size={17} /><span><b>You’re on the list</b><small>{registrationStatus === 'Attended' ? 'Attendance verified' : 'Registration confirmed'}</small></span></div>{onCancel && <button className="button button-cancel" onClick={onCancel}>Cancel registration</button>}</> : <button className={`button ${open ? 'button-primary' : 'button-disabled'}`} disabled={!open} onClick={onRegister}>{open ? event.isPaid ? `Pay ${formatMoney(event.price ?? 0)} with eSewa` : 'Register for free' : available === 0 ? 'Event is full' : 'Registration closed'} {open && <ArrowRight size={15} />}</button>}<small className="registration-note">{event.isPaid ? 'Secure payment by eSewa is required to confirm your seat.' : 'No fee · Open to KIST students'}</small></aside></div></div>
 }
 function AuthPage({ mode, busy, feedback, onSignIn, onSignUp, onNavigate }: {
   mode: 'login' | 'register'
@@ -1712,7 +1779,8 @@ function ReportsPage({ events, registrations, donations, attendance }: {
 function LeaderboardPage({ members, currentMember }: { members: Member[]; currentMember: Member }) { return <div className="section-page leaderboard-page"><div className="leaderboard-banner"><div><span className="eyebrow">MEMBER RECOGNITION</span><h2>Showing up<br /><em>adds up.</em></h2><p>Points are earned by attending events and contributing to the club community.</p></div><div className="leaderboard-total"><TrendingUp size={20} /><b>{currentMember.points.toLocaleString()}</b><small>your club points</small></div></div><div className="panel leaderboard-table"><div className="panel-heading panel-heading-padded"><h3>Member leaderboard</h3><span className="result-count">Live points</span></div><div className="leader-list">{[...members].sort((a, b) => b.points - a.points).map((member, index) => <div className={`leader-row ${member.id === currentMember.id ? 'leader-current' : ''}`} key={member.id}><span className={`leader-rank ${index < 3 ? 'leader-rank-top' : ''}`}>{String(index + 1).padStart(2, '0')}</span><Avatar name={member.name} /><span className="leader-name"><b>{member.name}{member.id === currentMember.id && <small>YOU</small>}</b><small>{member.role === 'BOD' ? 'Board of Directors' : 'BIM Club member'}</small></span><span className="leader-points"><b>{member.points.toLocaleString()}</b><small>pts</small></span></div>)}</div></div></div> }
 function ProfilePage({ member, role, photoUrl, photoBusy, photoError, onPhotoUpload, busy, onSignOut }: { member: Member; role: Role; photoUrl: string | null; photoBusy: boolean; photoError: string; onPhotoUpload: (file: File) => Promise<void>; busy: boolean; onSignOut: () => Promise<void> }) { return <div className="section-page profile-page"><div className="profile-cover"><div className="profile-avatar-wrap"><Avatar name={displayName(role, member)} size imageUrl={photoUrl} /><label className="profile-photo-trigger" aria-label="Upload profile photo" title="Upload profile photo"><Plus size={15} /><input type="file" accept="image/jpeg,image/png,image/webp" disabled={photoBusy} onChange={(event) => { const selected = event.target.files?.[0]; if (selected) void onPhotoUpload(selected); event.currentTarget.value = '' }} /></label></div><span className="profile-member-since">MEMBER SINCE {formatDate(member.joined, { month: 'long', year: 'numeric' }).toUpperCase()}</span></div>{photoError && <div className="event-data-error profile-photo-error" role="alert"><span><b>Photo was not updated</b><small>{photoError}</small></span></div>}<div className="profile-details"><div className="profile-name-row"><div><h2>{displayName(role, member)}</h2><span className="role-tag role-participant">{role} · KIST College</span></div><button className="button button-quiet" disabled={busy} onClick={() => void onSignOut()}>{busy ? 'Signing out…' : 'Sign out'} <LogOut size={15} /></button></div><div className="profile-info-grid"><div><span>EMAIL</span><b>{member.email || 'No email on your account'}</b></div><div><span>MEMBERSHIP</span><b>BIM Club</b></div><div><span>CLUB POINTS</span><b>{member.points.toLocaleString()} points</b></div><div><span>ROLE</span><b>{role} account</b></div></div></div></div> }
 function EventEditor({ event, form, setForm, saving, error, onClose, onSave }: { event: ClubEvent | null; form: EventForm; setForm: (form: EventForm) => void; saving: boolean; error: string; onClose: () => void; onSave: (form: EventForm) => Promise<void> }) {
-  const update = (key: keyof EventForm, value: string | number) => setForm({ ...form, [key]: value })
+  const update = (key: keyof EventForm, value: string | number | boolean) => setForm({ ...form, [key]: value })
+  const updatePaid = (isPaid: boolean) => setForm({ ...form, isPaid, price: isPaid ? form.price : undefined })
   return <div className="modal-backdrop" role="presentation" onMouseDown={(click) => { if (click.target === click.currentTarget && !saving) onClose() }}>
     <div className="modal event-editor-modal" role="dialog" aria-modal="true" aria-labelledby="event-modal-title">
       <div className="modal-heading"><div><span className="eyebrow">EVENT MANAGEMENT</span><h2 id="event-modal-title">{event ? 'Edit event' : 'Create an event'}</h2></div><button className="icon-button" aria-label="Close" disabled={saving} onClick={onClose}><X size={19} /></button></div>
@@ -1724,6 +1792,7 @@ function EventEditor({ event, form, setForm, saving, error, onClose, onSave }: {
         <div className="form-grid-two"><label className="form-label">Start time<input type="time" value={form.startTime} onChange={(e) => update('startTime', e.target.value)} /></label><label className="form-label">End time<input type="time" value={form.endTime} onChange={(e) => update('endTime', e.target.value)} /></label></div>
         <label className="form-label">Location<input value={form.location} onChange={(e) => update('location', e.target.value)} placeholder="Venue or room" /></label>
         <div className="form-grid-two"><label className="form-label">Category<select value={form.category} onChange={(e) => update('category', e.target.value)}><option>Workshop</option><option>Design</option><option>Competition</option><option>Seminar</option><option>Community</option></select></label><label className="form-label">Maximum participants<input type="number" min="1" value={form.maxParticipants} onChange={(e) => update('maxParticipants', Number(e.target.value))} /></label></div>
+        <div className="form-grid-two"><label className="form-label">Registration fee<select value={form.isPaid ? 'paid' : 'free'} onChange={(e) => updatePaid(e.target.value === 'paid')}><option value="free">Free</option><option value="paid">Paid</option></select></label>{form.isPaid && <label className="form-label">Fee (NPR)<input type="number" min="1" step="0.01" required value={form.price ?? ''} onChange={(e) => update('price', Number(e.target.value))} placeholder="e.g. 500" /></label>}</div>
         <div className="form-grid-two"><label className="form-label">Status<select value={form.status} onChange={(e) => update('status', e.target.value)}>{(['Draft', 'Published', 'Registration Open', 'Registration Closed', 'Completed', 'Cancelled'] as EventStatus[]).map((status) => <option key={status}>{status}</option>)}</select></label><label className="form-label">Image URL<input value={form.image} onChange={(e) => update('image', e.target.value)} placeholder="Optional image URL" /></label></div>
       </div>
       <div className="modal-footer"><button className="button button-quiet" disabled={saving} onClick={onClose}>Cancel</button><button className="button button-primary" disabled={saving} onClick={() => void onSave(form)}>{saving ? 'Saving…' : event ? 'Save changes' : 'Create event'} {!saving && <ArrowRight size={15} />}</button></div>
@@ -1741,6 +1810,8 @@ function DonationEditor({ onClose, onSave, role, memberName }: {
   const [amount, setAmount] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const isFormReady = Boolean(purpose.trim()) && Boolean(amount) && Number(amount) > 0 && (role === 'Participant' || name.trim())
+
   const submit = async () => {
     setSaving(true)
     setError('')
@@ -1752,6 +1823,32 @@ function DonationEditor({ onClose, onSave, role, memberName }: {
       setSaving(false)
     }
   }
+
+  const payWithEsewa = async () => {
+    try {
+      if (!isFormReady) {
+        setError('Enter the contributor, purpose, and amount before opening eSewa.')
+        return
+      }
+      if (!hasEsewaConfig) {
+        setError('Set VITE_ESEWA_MERCHANT_CODE and the callback URLs in .env.local before using the eSewa payment flow.')
+        return
+      }
+
+      await submitEsewaPayment({
+        amount: Number(amount),
+        purpose: purpose.trim(),
+        donorName: role === 'Participant' ? memberName : name.trim(),
+        merchantCode: import.meta.env.VITE_ESEWA_MERCHANT_CODE,
+        productCode: import.meta.env.VITE_ESEWA_PRODUCT_CODE,
+        successUrl: import.meta.env.VITE_ESEWA_SUCCESS_URL,
+        failureUrl: import.meta.env.VITE_ESEWA_FAILURE_URL,
+      })
+    } catch (paymentError) {
+      setError(paymentError instanceof Error ? paymentError.message : 'Unable to start the eSewa payment flow.')
+    }
+  }
+
   return <div className="modal-backdrop" role="presentation">
     <div className="modal donation-editor-modal" role="dialog" aria-modal="true" aria-labelledby="donation-modal-title">
       <div className="modal-heading"><div><span className="eyebrow">CLUB FINANCE</span><h2 id="donation-modal-title">{role === 'Participant' ? 'Make a contribution' : 'Add donation'}</h2></div><button className="icon-button" aria-label="Close" disabled={saving} onClick={onClose}><X size={19} /></button></div>
@@ -1761,7 +1858,11 @@ function DonationEditor({ onClose, onSave, role, memberName }: {
         <label className="form-label">Amount (NPR)<input type="number" min="1" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="0" /></label>
         {error && <div className="event-data-error" role="alert">{error}</div>}
       </div>
-      <div className="modal-footer"><button className="button button-quiet" disabled={saving} onClick={onClose}>Cancel</button><button className="button button-primary" disabled={saving || !purpose.trim() || !amount || Number(amount) <= 0 || (role !== 'Participant' && !name.trim())} onClick={() => void submit()}>{saving ? 'Saving…' : 'Save donation'} <Check size={15} /></button></div>
+      <div className="modal-footer">
+        <button className="button button-quiet" disabled={saving} onClick={onClose}>Cancel</button>
+        <button className="button button-quiet" disabled={saving || !isFormReady} onClick={() => void payWithEsewa()}>Pay with eSewa</button>
+        <button className="button button-primary" disabled={saving || !isFormReady} onClick={() => void submit()}>{saving ? 'Saving…' : 'Save donation'} <Check size={15} /></button>
+      </div>
     </div>
   </div>
 }

@@ -9,6 +9,7 @@ export interface ClubRepository {
   downloadClubFile(file: ClubFile): Promise<Blob>
   deleteClubFile(file: ClubFile, role: Role): Promise<void>
   createDonation(donation: Omit<Donation, 'id' | 'date' | 'status'>, memberId: string, role: Role): Promise<Donation>
+  recordDemoDonationPayment(amount: number, paymentRef: string): Promise<Donation>
   loadNotifications(memberId: string, role: Role): Promise<Notification[]>
   createNotification(notification: Omit<Notification, 'id' | 'timestamp' | 'read'>, createdBy: string): Promise<Notification>
   markNotificationRead(notificationId: string, memberId: string): Promise<void>
@@ -81,6 +82,8 @@ const mapClubEvent = (event: Record<string, any>): ClubEvent => ({
   maxParticipants: Number(event.max_participants ?? 50),
   registrationDeadline: formatDate(event.registration_deadline ?? event.event_date ?? new Date().toISOString()),
   status: event.status ?? 'Published',
+  isPaid: Boolean(event.is_paid ?? event.isPaid ?? false),
+  price: Number(event.price ?? 0) > 0 ? Number(event.price ?? 0) : undefined,
 })
 
 const eventToDatabase = (event: Omit<ClubEvent, 'id'>) => ({
@@ -95,6 +98,8 @@ const eventToDatabase = (event: Omit<ClubEvent, 'id'>) => ({
   max_participants: event.maxParticipants,
   registration_deadline: event.registrationDeadline,
   status: event.status,
+  is_paid: event.isPaid ?? false,
+  price: event.isPaid ? Number(event.price ?? 0) : null,
 })
 
 export const mockClubRepository: ClubRepository = {
@@ -125,6 +130,23 @@ export const mockClubRepository: ClubRepository = {
   },
   async createDonation() {
     throw new Error('Supabase is not configured. Donations cannot be recorded.')
+  },
+  async recordDemoDonationPayment(amount, paymentRef) {
+    const safeAmount = Number(amount)
+    if (!Number.isFinite(safeAmount) || safeAmount <= 0) throw new Error('A positive donation amount is required.')
+    if (!paymentRef.trim()) throw new Error('A payment reference is required.')
+    return {
+      id: `don-${Date.now()}`,
+      name: 'BIM Club supporter',
+      purpose: 'Demo contribution',
+      amount: safeAmount,
+      date: new Date().toISOString().slice(0, 10),
+      status: 'Received',
+      paymentMethod: 'eSewa Demo',
+      paymentRef: paymentRef.trim(),
+      paidAmount: safeAmount,
+      paidAt: new Date().toISOString(),
+    }
   },
   async loadNotifications() {
     return mockSnapshot.notifications.map((notification) => ({ ...notification }))
@@ -340,6 +362,57 @@ export const supabaseClubRepository: ClubRepository = {
       status: data.status === 'received' ? 'Received' : 'Pending',
     }
   },
+  async recordDemoDonationPayment(amount, paymentRef) {
+    if (!supabase || !hasSupabaseConfig) throw new Error('Supabase is not configured. Donations cannot be recorded.')
+    const safeAmount = Number(amount)
+    if (!Number.isFinite(safeAmount) || safeAmount <= 0) throw new Error('A positive donation amount is required.')
+    const trimmedRef = String(paymentRef ?? '').trim()
+    if (!trimmedRef) throw new Error('A payment reference is required.')
+
+    const { data: user, error: userError } = await supabase.auth.getUser()
+    if (userError) throw userError
+    const donorId = user.user?.id
+    if (!donorId) throw new Error('You must be signed in to pay for a donation.')
+
+    const { data: profile, error: profileError } = await supabase
+      .from('profiles')
+      .select('full_name')
+      .eq('id', donorId)
+      .single()
+    if (profileError) throw profileError
+
+    const { data, error } = await supabase
+      .from('donations')
+      .insert({
+        donor_profile_id: donorId,
+        contributor_name: profile.full_name ?? 'BIM Club supporter',
+        purpose: 'eSewa Demo contribution',
+        amount: safeAmount,
+        status: 'received',
+        recorded_by: donorId,
+        payment_method: 'esewa-demo',
+        payment_ref: trimmedRef,
+        paid_amount: safeAmount,
+        paid_at: new Date().toISOString(),
+      })
+      .select('*')
+      .single()
+    if (error) throw error
+
+    return {
+      id: data.id,
+      name: data.contributor_name ?? 'BIM Club supporter',
+      memberId: data.donor_profile_id ?? donorId,
+      purpose: data.purpose ?? 'eSewa Demo contribution',
+      amount: Number(data.amount ?? safeAmount),
+      date: formatDate(data.donated_at ?? new Date().toISOString()),
+      status: data.status === 'received' ? 'Received' : 'Pending',
+      paymentMethod: data.payment_method === 'esewa-demo' ? 'eSewa Demo' : data.payment_method ?? 'eSewa Demo',
+      paymentRef: data.payment_ref ?? trimmedRef,
+      paidAmount: Number(data.paid_amount ?? safeAmount),
+      paidAt: data.paid_at ?? new Date().toISOString(),
+    }
+  },
   async createNotification(notification, createdBy) {
     if (!supabase || !hasSupabaseConfig) {
       return mockClubRepository.createNotification(notification, createdBy)
@@ -526,6 +599,10 @@ export const supabaseClubRepository: ClubRepository = {
       email: profilesById.get(registration.member_id)?.email ?? 'member@kist.edu.np',
       registeredAt: formatDate(registration.registered_at ?? new Date().toISOString()),
       status: asStatus(registration.status),
+      paymentMethod: registration.payment_method ?? undefined,
+      paymentRef: registration.payment_ref ?? undefined,
+      paidAmount: registration.paid_amount == null ? undefined : Number(registration.paid_amount),
+      paidAt: registration.paid_at ?? undefined,
     }))
 
     const attendance: AttendanceRecord[] = ((attendanceResult.data ?? []) as any[]).map((record: any) => ({

@@ -21,6 +21,8 @@ export type ClubEvent = {
   maxParticipants: number
   registrationDeadline: string
   status: EventStatus
+  isPaid?: boolean
+  price?: number
 }
 
 export type Registration = {
@@ -31,6 +33,10 @@ export type Registration = {
   email: string
   registeredAt: string
   status: 'Confirmed' | 'Attended' | 'Cancelled'
+  paymentMethod?: string
+  paymentRef?: string
+  paidAmount?: number
+  paidAt?: string
 }
 
 export type Donation = {
@@ -41,6 +47,10 @@ export type Donation = {
   amount: number
   date: string
   status: 'Received' | 'Pending'
+  paymentMethod?: string
+  paymentRef?: string
+  paidAmount?: number
+  paidAt?: string
 }
 
 export type AttendanceRecord = {
