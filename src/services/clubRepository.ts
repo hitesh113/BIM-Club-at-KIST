@@ -5,6 +5,9 @@ import type { ActivityLogEntry, AttendanceRecord, ClubEvent, ClubFile, ClubSnaps
 export interface ClubRepository {
   loadSnapshot(): Promise<ClubSnapshot> | ClubSnapshot
   loadEvents(): Promise<ClubEvent[]>
+  uploadClubFile(file: File, uploaderId: string): Promise<ClubFile>
+  downloadClubFile(file: ClubFile): Promise<Blob>
+  createDonation(donation: Omit<Donation, 'id' | 'date' | 'status'>, memberId: string, role: Role): Promise<Donation>
   loadNotifications(memberId: string, role: Role): Promise<Notification[]>
   createNotification(notification: Omit<Notification, 'id' | 'timestamp' | 'read'>, createdBy: string): Promise<Notification>
   markNotificationRead(notificationId: string, memberId: string): Promise<void>
@@ -39,6 +42,11 @@ const asFileCategory = (value: unknown): ClubFile['category'] => {
   if (category === 'Club Guidelines') return 'Club Guidelines'
   if (category === 'Reports') return 'Reports'
   return 'Other'
+}
+
+const fileTypeFromName = (name: string): string => {
+  const extension = name.split('.').pop()
+  return name.includes('.') && extension ? extension.toUpperCase() : 'FILE'
 }
 
 const formatRelativeTime = (value: string): string => {
@@ -103,6 +111,15 @@ export const mockClubRepository: ClubRepository = {
   },
   async loadEvents() {
     return mockSnapshot.events.map((event) => ({ ...event }))
+  },
+  async uploadClubFile() {
+    throw new Error('Supabase is not configured. Club files cannot be uploaded.')
+  },
+  async downloadClubFile() {
+    throw new Error('Supabase is not configured. Club files cannot be downloaded.')
+  },
+  async createDonation() {
+    throw new Error('Supabase is not configured. Donations cannot be recorded.')
   },
   async loadNotifications() {
     return mockSnapshot.notifications.map((notification) => ({ ...notification }))
@@ -205,6 +222,94 @@ export const supabaseClubRepository: ClubRepository = {
           ? role
           : 'All',
     }))
+  },
+  async uploadClubFile(file, uploaderId) {
+    if (!supabase || !hasSupabaseConfig) {
+      throw new Error('Supabase is not configured. Club files cannot be uploaded.')
+    }
+
+    const safeName = file.name.replace(/[^\w.-]+/g, '-')
+    const storagePath = `${uploaderId}/${crypto.randomUUID()}-${safeName}`
+    const { error: uploadError } = await supabase.storage
+      .from('club-private-files')
+      .upload(storagePath, file, { contentType: file.type || 'application/octet-stream' })
+    if (uploadError) throw uploadError
+
+    const { data, error: metadataError } = await supabase
+      .from('files')
+      .insert({
+        name: file.name,
+        storage_path: storagePath,
+        mime_type: file.type || 'application/octet-stream',
+        category: 'Other',
+        access_level: 'members',
+        size_bytes: file.size,
+        uploaded_by: uploaderId,
+      })
+      .select('id, name, storage_path, mime_type, category, uploaded_at, uploaded_by, size_bytes')
+      .single()
+
+    if (metadataError) {
+      const { error: cleanupError } = await supabase.storage
+        .from('club-private-files')
+        .remove([storagePath])
+      if (cleanupError) {
+        throw new Error(`${metadataError.message}; uploaded file cleanup failed: ${cleanupError.message}`)
+      }
+      throw metadataError
+    }
+
+    return {
+      id: data.id,
+      name: data.name,
+      type: fileTypeFromName(data.name),
+      mimeType: data.mime_type,
+      storagePath: data.storage_path,
+      category: asFileCategory(data.category),
+      uploadDate: formatDate(data.uploaded_at),
+      uploadedBy: 'You',
+      size: `${Math.max(1, Math.round(data.size_bytes / 1024))} KB`,
+    }
+  },
+  async downloadClubFile(file) {
+    if (!supabase || !hasSupabaseConfig) {
+      throw new Error('Supabase is not configured. Club files cannot be downloaded.')
+    }
+
+    const { data, error } = await supabase.storage
+      .from('club-private-files')
+      .download(file.storagePath)
+    if (error) throw error
+    return data
+  },
+  async createDonation(donation, memberId, role) {
+    if (!supabase || !hasSupabaseConfig) {
+      throw new Error('Supabase is not configured. Donations cannot be recorded.')
+    }
+
+    const isAdmin = role === 'Admin'
+    const { data, error } = await supabase
+      .from('donations')
+      .insert({
+        donor_profile_id: isAdmin ? null : memberId,
+        contributor_name: donation.name,
+        purpose: donation.purpose,
+        amount: donation.amount,
+        status: isAdmin ? 'received' : 'pending',
+        recorded_by: isAdmin ? memberId : null,
+      })
+      .select('id, donor_profile_id, contributor_name, purpose, amount, donated_at, status')
+      .single()
+    if (error) throw error
+    return {
+      id: data.id,
+      name: data.contributor_name,
+      memberId: data.donor_profile_id ?? undefined,
+      purpose: data.purpose,
+      amount: Number(data.amount),
+      date: formatDate(data.donated_at),
+      status: data.status === 'received' ? 'Received' : 'Pending',
+    }
   },
   async createNotification(notification, createdBy) {
     if (!supabase || !hasSupabaseConfig) {
@@ -410,7 +515,9 @@ export const supabaseClubRepository: ClubRepository = {
     const files: ClubFile[] = ((filesResult.data ?? []) as any[]).map((file: any) => ({
       id: file.id,
       name: file.name,
-      type: file.mime_type?.split('/').pop()?.toUpperCase() ?? 'PDF',
+      type: fileTypeFromName(file.name),
+      mimeType: file.mime_type ?? 'application/octet-stream',
+      storagePath: file.storage_path,
       category: asFileCategory(file.category),
       uploadDate: formatDate(file.uploaded_at ?? new Date().toISOString()),
       uploadedBy: profilesById.get(file.uploaded_by)?.full_name ?? 'Club admin',

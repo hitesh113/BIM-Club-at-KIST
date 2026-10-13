@@ -60,6 +60,8 @@ export type ClubFile = {
   id: string
   name: string
   type: string
+  mimeType: string
+  storagePath: string
   category: 'Notices' | 'Event Documents' | 'Club Guidelines' | 'Reports' | 'Other'
   uploadDate: string
   uploadedBy: string
