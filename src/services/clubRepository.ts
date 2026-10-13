@@ -638,6 +638,10 @@ export const supabaseClubRepository: ClubRepository = {
       amount: Number(donation.amount ?? 0),
       date: formatDate(donation.donated_at ?? new Date().toISOString()),
       status: donation.status === 'received' ? 'Received' : 'Pending',
+      paymentMethod: donation.payment_method ?? undefined,
+      paymentRef: donation.payment_ref ?? undefined,
+      paidAmount: donation.paid_amount == null ? undefined : Number(donation.paid_amount),
+      paidAt: donation.paid_at ?? undefined,
     }))
 
     const notificationReadRows = (notificationReadsResult.data ?? []) as any[]

@@ -735,13 +735,18 @@ function App() {
     }
   }
   useEffect(() => {
-    const parameters = new URLSearchParams(window.location.search)
-    const paymentState = parameters.get('event_payment')
-    if (!paymentState || authLoading || handledEventPayment.current) return
-    const eventId = parameters.get('event_id') ?? ''
-    const paymentData = (parameters.get('data') ?? '').replaceAll(' ', '+')
+    const rawSearch = window.location.search
+    if (!rawSearch || authLoading || handledEventPayment.current) return
 
-    if (paymentState !== 'success') {
+    const parameters = new URLSearchParams(rawSearch)
+    const paymentState = (parameters.get('event_payment') ?? parameters.get('payment') ?? rawSearch.match(/[?&](?:event_payment|payment)=([^?&]+)/)?.[1] ?? '').trim().toLowerCase()
+    const eventId = (parameters.get('event_id') ?? rawSearch.match(/[?&]event_id=([^?&]+)/)?.[1] ?? '').trim()
+    const encodedData = parameters.get('data') ?? rawSearch.match(/[?&]data=([^&]+)/)?.[1] ?? ''
+    const paymentData = encodedData ? decodeURIComponent(encodedData.replace(/\+/g, ' ')) : ''
+
+    if (!paymentState && !encodedData) return
+
+    if (paymentState && paymentState !== 'success') {
       handledEventPayment.current = true
       window.history.replaceState({}, '', `${window.location.pathname}${window.location.hash}`)
       window.setTimeout(() => notify('eSewa payment was cancelled or not completed. You have not been registered.'), 0)
@@ -1496,9 +1501,93 @@ function EventDataState({ loading, error, mutationError, onRetry }: { loading: b
 }
 function SearchField({ value, onChange, placeholder }: { value: string; onChange: (value: string) => void; placeholder: string }) { return <label className="search-field"><Search size={16} /><input value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} /></label> }
 function SelectField({ value, onChange, options, icon }: { value: string; onChange: (value: string) => void; options: string[]; icon?: React.ReactNode }) { return <label className="select-field">{icon}<select value={value} onChange={(event) => onChange(event.target.value)}>{options.map((option) => <option key={option}>{option}</option>)}</select><ChevronDown size={14} /></label> }
-function RegistrationsPage({ events, registrations, query, setQuery }: { events: ClubEvent[]; registrations: Registration[]; query: string; setQuery: (value: string) => void }) { const filtered = registrations.filter((item) => `${item.name} ${item.email} ${events.find((event) => event.id === item.eventId)?.title ?? ''}`.toLowerCase().includes(query.toLowerCase())); return <div className="section-page"><div className="list-toolbar"><SearchField value={query} onChange={setQuery} placeholder="Search name, email, or event" /><span className="result-count">{filtered.length} registrations</span><button className="button button-quiet" onClick={() => window.print()}><ArrowDownToLine size={15} /> Export</button></div><div className="panel event-table-panel"><div className="table-scroll"><table className="data-table"><thead><tr><th>MEMBER</th><th>EVENT</th><th>REGISTERED</th><th>STATUS</th></tr></thead><tbody>{filtered.map((item) => <tr key={item.id}><td><MemberCell name={item.name} email={item.email} /></td><td><b>{events.find((event) => event.id === item.eventId)?.title ?? 'Removed event'}</b></td><td>{formatDate(item.registeredAt, { month: 'short', day: 'numeric' })}</td><td><StatusBadge status={item.status} /></td></tr>)}</tbody></table></div>{filtered.length === 0 && <EmptyState title="No registrations yet" detail="Event signups will appear here." />}</div></div> }
+function RegistrationsPage({ events, registrations, query, setQuery }: { events: ClubEvent[]; registrations: Registration[]; query: string; setQuery: (value: string) => void }) {
+  const filtered = registrations.filter((item) => `${item.name} ${item.email} ${events.find((event) => event.id === item.eventId)?.title ?? ''} ${item.paymentMethod ?? ''} ${item.paymentRef ?? ''}`.toLowerCase().includes(query.toLowerCase()))
+  return <div className="section-page">
+    <div className="list-toolbar">
+      <SearchField value={query} onChange={setQuery} placeholder="Search name, email, event, or ref" />
+      <span className="result-count">{filtered.length} registrations</span>
+      <button className="button button-quiet" onClick={() => window.print()}><ArrowDownToLine size={15} /> Export</button>
+    </div>
+    <div className="panel event-table-panel">
+      <div className="table-scroll">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>MEMBER</th>
+              <th>EVENT</th>
+              <th>REGISTERED</th>
+              <th>PAYMENT</th>
+              <th>STATUS</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((item) => {
+              const event = events.find((e) => e.id === item.eventId)
+              const hasPayment = item.paidAmount != null && item.paidAmount > 0
+              return <tr key={item.id}>
+                <td><MemberCell name={item.name} email={item.email} /></td>
+                <td><b>{event?.title ?? 'Removed event'}</b></td>
+                <td>{formatDate(item.registeredAt, { month: 'short', day: 'numeric' })}</td>
+                <td>
+                  {hasPayment ? (
+                    <div>
+                      <b style={{ color: '#16a34a' }}>NPR {item.paidAmount?.toLocaleString()}</b>
+                      <small style={{ display: 'block', color: 'var(--text-subtle, #64748b)', fontSize: '0.75rem' }}>
+                        {item.paymentMethod || 'eSewa'} {item.paymentRef ? `• Ref: ${item.paymentRef.slice(0, 8)}…` : ''}
+                      </small>
+                    </div>
+                  ) : event?.isPaid ? (
+                    <span className="status-badge badge-pending">Payment Pending</span>
+                  ) : (
+                    <span style={{ color: 'var(--text-subtle, #64748b)' }}>Free Event</span>
+                  )}
+                </td>
+                <td><StatusBadge status={item.status} /></td>
+              </tr>
+            })}
+          </tbody>
+        </table>
+      </div>
+      {filtered.length === 0 && <EmptyState title="No registrations yet" detail="Event signups will appear here." />}
+    </div>
+  </div>
+}
 function MemberCell({ name, email }: { name: string; email: string }) { return <div className="member-cell"><Avatar name={name} /><span><b>{name}</b><small>{email}</small></span></div> }
-function RegistrationTable({ registrations, events, compact = false }: { registrations: Registration[]; events: ClubEvent[]; compact?: boolean }) { return <div className="table-scroll"><table className={`data-table ${compact ? 'data-table-compact' : ''}`}><thead><tr><th>MEMBER</th><th>EVENT</th><th>STATUS</th></tr></thead><tbody>{registrations.map((item) => <tr key={item.id}><td><MemberCell name={item.name} email={item.email.split('@')[0]} /></td><td><span className="table-event-title">{events.find((event) => event.id === item.eventId)?.title ?? 'Removed event'}</span></td><td><StatusBadge status={item.status} /></td></tr>)}</tbody></table></div> }
+function RegistrationTable({ registrations, events, compact = false }: { registrations: Registration[]; events: ClubEvent[]; compact?: boolean }) {
+  return <div className="table-scroll">
+    <table className={`data-table ${compact ? 'data-table-compact' : ''}`}>
+      <thead>
+        <tr>
+          <th>MEMBER</th>
+          <th>EVENT</th>
+          <th>FEE</th>
+          <th>STATUS</th>
+        </tr>
+      </thead>
+      <tbody>
+        {registrations.map((item) => {
+          const event = events.find((e) => e.id === item.eventId)
+          const hasPayment = item.paidAmount != null && item.paidAmount > 0
+          return <tr key={item.id}>
+            <td><MemberCell name={item.name} email={item.email.split('@')[0]} /></td>
+            <td><span className="table-event-title">{event?.title ?? 'Removed event'}</span></td>
+            <td>
+              {hasPayment ? (
+                <b style={{ color: '#16a34a', fontSize: '0.85rem' }}>NPR {item.paidAmount?.toLocaleString()}</b>
+              ) : event?.isPaid ? (
+                <small style={{ color: '#d97706' }}>Pending</small>
+              ) : (
+                <small style={{ color: 'var(--text-subtle, #64748b)' }}>Free</small>
+              )}
+            </td>
+            <td><StatusBadge status={item.status} /></td>
+          </tr>
+        })}
+      </tbody>
+    </table>
+  </div>
+}
 function DonationRow({ donation }: { donation: Donation }) { return <div className="donation-row"><span className="donation-icon"><Heart size={14} /></span><div><b>{donation.name}</b><small>{donation.purpose}</small></div><strong>{formatMoney(donation.amount)}</strong></div> }
 function ParticipantDonationsPage({ donations, member, onContribute }: { donations: Donation[]; member: Member; onContribute: () => void }) { const mine = donations.filter((item) => item.memberId === member.id); const total = mine.filter((item) => item.status === 'Received').reduce((sum, item) => sum + item.amount, 0); return <div className="section-page"><div className="donation-summary"><div><span className="eyebrow">YOUR SUPPORT</span><div className="donation-total">{formatMoney(total)}</div><p>Your contributions help fund workshops and student projects.</p><button className="button button-lime" onClick={onContribute}><Heart size={15} /> Make a contribution</button></div><div className="donation-summary-icon"><Heart size={32} strokeWidth={1.3} /></div></div><div className="panel event-table-panel"><div className="panel-heading panel-heading-padded"><h3>Donation history</h3><span className="result-count">{mine.length} contributions</span></div><div className="table-scroll"><table className="data-table"><thead><tr><th>PURPOSE</th><th>DATE</th><th>AMOUNT</th><th>STATUS</th></tr></thead><tbody>{mine.map((item) => <tr key={item.id}><td>{item.purpose}</td><td>{formatDate(item.date, { month: 'short', day: 'numeric', year: 'numeric' })}</td><td><b>{formatMoney(item.amount)}</b></td><td><StatusBadge status={item.status} /></td></tr>)}</tbody></table></div>{mine.length === 0 && <EmptyState title="No contributions yet" detail="Your contribution history will appear here." />}</div><p className="disclaimer-note"><ShieldCheck size={14} /> Contributions are recorded as pending until confirmed by club staff.</p></div> }
 function AttendancePage({ role, currentMember, registrations, attendance, events, onScan }: {
@@ -1757,15 +1846,17 @@ function ReportsPage({ events, registrations, donations, attendance }: {
   donations: Donation[]
   attendance: AttendanceRecord[]
 }) {
-  const raised = donations.filter((item) => item.status === 'Received').reduce((sum, item) => sum + item.amount, 0)
+  const donationsRaised = donations.filter((item) => item.status === 'Received').reduce((sum, item) => sum + item.amount, 0)
+  const eventRevenue = registrations.filter((item) => item.paidAmount != null && item.status !== 'Cancelled').reduce((sum, item) => sum + (item.paidAmount ?? 0), 0)
+  const totalFunds = donationsRaised + eventRevenue
   const categories = [...new Set(events.map((event) => event.category))]
   return <div className="section-page">
     <div className="report-topline"><span>Live club records</span><button className="button button-quiet" onClick={() => window.print()}><ArrowDownToLine size={15} /> Export report</button></div>
     <div className="metric-grid metric-grid-4">
       <Metric icon={CalendarDays} label="Events hosted" value={String(events.length)} detail="In the live club calendar" tone="green" />
-      <Metric icon={Users} label="Registrations" value={String(registrations.length)} detail="Live event registrations" tone="blue" />
+      <Metric icon={Users} label="Registrations" value={String(registrations.length)} detail={`${registrations.filter((r) => r.paidAmount != null).length} paid via eSewa`} tone="blue" />
       <Metric icon={CheckCircle2} label="Total attendance" value={String(attendance.length)} detail="Verified check-ins" tone="peach" />
-      <Metric icon={CircleDollarSign} label="Raised" value={formatMoney(raised)} detail="Confirmed donations" tone="yellow" />
+      <Metric icon={CircleDollarSign} label="Total funds raised" value={formatMoney(totalFunds)} detail={`${formatMoney(eventRevenue)} tickets · ${formatMoney(donationsRaised)} donations`} tone="yellow" />
     </div>
     <div className="content-grid report-charts">
       <section className="panel chart-panel"><PanelHeading title="Monthly attendance" /><div className="chart-wrap"><AttendanceChart attendance={attendance} /></div></section>
