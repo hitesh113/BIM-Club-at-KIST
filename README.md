@@ -78,6 +78,7 @@ The app requires the Supabase schema, access policies, Storage buckets, and Real
 3. `supabase/migrations/003_registered_attendance.sql` adds the atomic, registration-validated attendance check-in operation.
 4. `supabase/migrations/004_member_profiles_realtime_notifications.sql` adds private profile-photo Storage and Realtime support for notifications.
 5. `supabase/migrations/005_realtime_club_data.sql` enables Realtime for the remaining club data tables.
+6. `supabase/migrations/006_fix_club_file_storage_reads.sql` fixes the private-file read policy so it compares file metadata with the Storage object's full key, and restricts file deletion policies to administrators. Apply this migration on existing projects to ensure files can be previewed, downloaded, and deleted by admins only.
 
 For an existing installation, first identify which migrations have already been applied and run only the unapplied migrations, preserving this order. Review each SQL file and confirm the Dashboard is connected to the intended project before running it. The migrations do not populate demo records; existing event rows are preserved, and new members are created as `participant` profiles by the Supabase Auth trigger when they sign up. Configure the app's Supabase URL and publishable key as described above.
 

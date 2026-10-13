@@ -7,6 +7,7 @@ export interface ClubRepository {
   loadEvents(): Promise<ClubEvent[]>
   uploadClubFile(file: File, uploaderId: string): Promise<ClubFile>
   downloadClubFile(file: ClubFile): Promise<Blob>
+  deleteClubFile(file: ClubFile, role: Role): Promise<void>
   createDonation(donation: Omit<Donation, 'id' | 'date' | 'status'>, memberId: string, role: Role): Promise<Donation>
   loadNotifications(memberId: string, role: Role): Promise<Notification[]>
   createNotification(notification: Omit<Notification, 'id' | 'timestamp' | 'read'>, createdBy: string): Promise<Notification>
@@ -117,6 +118,10 @@ export const mockClubRepository: ClubRepository = {
   },
   async downloadClubFile() {
     throw new Error('Supabase is not configured. Club files cannot be downloaded.')
+  },
+  async deleteClubFile(_file, role) {
+    if (role !== 'Admin') throw new Error('Only administrators can delete club files.')
+    throw new Error('Supabase is not configured. Club files cannot be deleted.')
   },
   async createDonation() {
     throw new Error('Supabase is not configured. Donations cannot be recorded.')
@@ -279,8 +284,32 @@ export const supabaseClubRepository: ClubRepository = {
     const { data, error } = await supabase.storage
       .from('club-private-files')
       .download(file.storagePath)
-    if (error) throw error
+    if (error) {
+      if (error.message.toLowerCase().includes('object not found')) {
+        throw new Error(`The stored contents for "${file.name}" could not be found. This file record may point to a missing Storage object; ask a club administrator to upload the file again.`)
+      }
+      throw error
+    }
     return data
+  },
+  async deleteClubFile(file, role) {
+    if (role !== 'Admin') throw new Error('Only administrators can delete club files.')
+    if (!supabase || !hasSupabaseConfig) {
+      throw new Error('Supabase is not configured. Club files cannot be deleted.')
+    }
+
+    const { error: storageError } = await supabase.storage
+      .from('club-private-files')
+      .remove([file.storagePath])
+    if (storageError) throw storageError
+
+    const { error: metadataError } = await supabase
+      .from('files')
+      .delete()
+      .eq('id', file.id)
+    if (metadataError) {
+      throw new Error(`The stored file was removed, but its file record could not be deleted: ${metadataError.message}`)
+    }
   },
   async createDonation(donation, memberId, role) {
     if (!supabase || !hasSupabaseConfig) {

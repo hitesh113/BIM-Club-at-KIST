@@ -1,4 +1,4 @@
--- Run in the Supabase SQL Editor after migrations 001-005 and after both accounts have profiles.
+-- Run in the Supabase SQL Editor after migrations 001-006 and after both accounts have profiles.
 -- This aborts if either first-name match is missing or ambiguous, or if Maya still owns Storage files.
 begin;
 

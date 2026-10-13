@@ -5,7 +5,7 @@ import {
   Filter, Heart, LayoutDashboard, LogOut, MapPin, Menu, Plus, QrCode, Search,
   Settings2, ShieldCheck, Sparkles, TrendingUp, Users, X, Upload,
   CircleDollarSign, GraduationCap, ChartNoAxesCombined, ClipboardList, Building2,
-  ScanLine, BookOpen, Handshake, UserPlus, Globe, Eye,
+  ScanLine, BookOpen, Handshake, UserPlus, Globe, Eye, Trash2,
 } from 'lucide-react'
 import {
   Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis,
@@ -843,6 +843,16 @@ function App() {
       }}
       onPreview={previewClubFile}
       onDownload={downloadClubFile}
+      onDelete={async (file) => {
+        try {
+          await clubRepository.deleteClubFile(file, role)
+          await refreshSnapshot()
+          notify('File deleted')
+        } catch (error) {
+          notify(`File was not deleted: ${error instanceof Error ? error.message : 'Unable to delete file.'}`)
+          throw error
+        }
+      }}
     />
     if (page === 'donations' && role === 'Participant') return <ParticipantDonationsPage donations={donations} member={currentMember} onContribute={() => setDonationModal(true)} />
     if (page === 'donations') return <DonationsPage role={role} donations={donations} onAdd={() => setDonationModal(true)} />
@@ -1504,12 +1514,13 @@ function RegistrationQr({ registration }: { registration: Registration }) {
     {image ? <img src={image} alt={`Check-in QR for ${registration.name}`} /> : <span role="status">{error || 'Generating QR code…'}</span>}
   </div>
 }
-function FilesPage({ role, files, onUpload, onPreview, onDownload }: {
+function FilesPage({ role, files, onUpload, onPreview, onDownload, onDelete }: {
   role: Role
   files: ClubFile[]
   onUpload: (file: File) => Promise<void>
   onPreview: (file: ClubFile) => Promise<Blob>
   onDownload: (file: ClubFile) => Promise<void>
+  onDelete: (file: ClubFile) => Promise<void>
 }) {
   const [query, setQuery] = useState('')
   const [category, setCategory] = useState('All categories')
@@ -1591,6 +1602,18 @@ function FilesPage({ role, files, onUpload, onPreview, onDownload }: {
       setBusy('')
     }
   }
+  const deleteFile = async (file: ClubFile) => {
+    if (role !== 'Admin' || !window.confirm(`Permanently delete "${file.name}"? This cannot be undone.`)) return
+    setError('')
+    setBusy(file.id)
+    try {
+      await onDelete(file)
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : 'Unable to delete this file.')
+    } finally {
+      setBusy('')
+    }
+  }
   const selectedSheet = preview?.sheets?.find((sheet) => sheet.name === preview.selectedSheet) ?? preview?.sheets?.[0]
 
   return <div className="section-page">
@@ -1617,12 +1640,13 @@ function FilesPage({ role, files, onUpload, onPreview, onDownload }: {
       <div className="table-scroll"><table className="data-table">
         <thead><tr><th>FILE NAME</th><th>FILE TYPE</th><th>CATEGORY</th><th>UPLOAD DATE</th><th>UPLOADED BY</th><th>ACTIONS</th></tr></thead>
         <tbody>{filtered.map((file) => <tr key={file.id}>
-          <td><div className="file-cell"><span className="file-icon file-green"><FileText size={17} /></span><span><b>{file.name}</b><small>{file.size}</small></span></div></td>
+          <td><div className="file-cell"><span className="file-icon file-green"><FileText size={17} /></span><span><button className="file-name-preview" title={`Preview ${file.name}`} disabled={busy === file.id} onClick={() => void viewFile(file)}>{file.name}</button><small>{file.size} · Click to preview</small></span></div></td>
           <td>{file.type}</td><td><span className="folder-label">{file.category}</span></td>
           <td>{formatDate(file.uploadDate, { month: 'short', day: 'numeric', year: 'numeric' })}</td><td>{file.uploadedBy}</td>
           <td><div className="table-actions">
-            <button className="icon-button" aria-label={`View ${file.name}`} disabled={busy === file.id} onClick={() => void viewFile(file)}><Eye size={15} /></button>
+            <button className="icon-button" aria-label={`View ${file.name}`} title="Preview file" disabled={busy === file.id} onClick={() => void viewFile(file)}><Eye size={15} /></button>
             <button className="icon-button" aria-label={`Download ${file.name}`} disabled={busy === file.id} onClick={() => void downloadFile(file)}><ArrowDownToLine size={15} /></button>
+            {role === 'Admin' && <button className="icon-button file-delete-button" aria-label={`Delete ${file.name}`} title="Delete file" disabled={busy === file.id} onClick={() => void deleteFile(file)}><Trash2 size={15} /></button>}
           </div></td>
         </tr>)}</tbody>
       </table></div>
