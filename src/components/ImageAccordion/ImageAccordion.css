@@ -1,0 +1,141 @@
+/* Scoped to .bim-accordion. Override the variables from the host page if needed. */
+.bim-accordion {
+  --ba-height: clamp(18rem, 42vw, 28rem);
+  --ba-gap: 0.75rem;
+  --ba-radius: 1rem;
+  --ba-open-grow: 6;        /* how much wider the open panel is vs. a closed one */
+  --ba-closed-size: 2.75rem; /* minimum size of a closed panel */
+  --ba-speed: 700ms;
+  --ba-bg: #1b2a49;          /* shows while an image loads or if it fails */
+
+  display: flex;
+  gap: var(--ba-gap);
+  height: var(--ba-height);
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  box-sizing: border-box;
+}
+
+.bim-accordion *,
+.bim-accordion *::before,
+.bim-accordion *::after {
+  box-sizing: border-box;
+}
+
+.bim-accordion__item {
+  position: relative;
+  flex: 1 1 0;
+  min-width: var(--ba-closed-size);
+  border-radius: var(--ba-radius);
+  overflow: hidden;
+  background: var(--ba-bg);
+  transition: flex-grow var(--ba-speed) ease-in-out;
+}
+
+.bim-accordion__item[data-active="true"] {
+  flex-grow: var(--ba-open-grow);
+}
+
+.bim-accordion__button {
+  appearance: none;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #fff;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.bim-accordion__button:focus-visible {
+  outline: 3px solid #fff;
+  outline-offset: -6px;
+  box-shadow: inset 0 0 0 6px rgb(0 0 0 / 0.55);
+}
+
+.bim-accordion__img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  user-select: none;
+}
+
+/* Overlay for caption legibility */
+.bim-accordion__button::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to top, rgb(0 0 0 / 0.7), rgb(0 0 0 / 0.25));
+  pointer-events: none;
+}
+
+/* Caption: vertical when closed, horizontal when open.
+   Rotates around its bottom-left corner so it stays centred in the strip. */
+.bim-accordion__caption {
+  position: absolute;
+  z-index: 1;
+  left: calc(50% + 0.6em);
+  bottom: 1.25rem;
+  max-width: calc(var(--ba-height) - 2.5rem);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.2;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 0.5);
+  transform-origin: left bottom;
+  transform: rotate(-90deg);
+  transition:
+    left 300ms ease-in-out,
+    transform 300ms ease-in-out;
+}
+
+.bim-accordion__item[data-active="true"] .bim-accordion__caption {
+  left: 1.25rem;
+  max-width: calc(100% - 2.5rem);
+  transform: rotate(0deg);
+}
+
+/* Small screens: stack vertically, caption always horizontal */
+@media (max-width: 40rem) {
+  .bim-accordion {
+    --ba-height: 26rem;
+    flex-direction: column;
+  }
+
+  .bim-accordion__item {
+    min-width: 0;
+    min-height: 3.25rem;
+  }
+
+  .bim-accordion__caption {
+    left: 1rem;
+    bottom: 1rem;
+    max-width: calc(100% - 2rem);
+    transform: none;
+  }
+
+  .bim-accordion__item[data-active="true"] .bim-accordion__caption {
+    left: 1rem;
+    max-width: calc(100% - 2rem);
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bim-accordion__item,
+  .bim-accordion__caption {
+    transition: none;
+  }
+}

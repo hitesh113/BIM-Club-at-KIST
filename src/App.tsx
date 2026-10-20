@@ -15,6 +15,7 @@ import { supabase } from './lib/supabase'
 import { completeEsewaEventPayment, hasEsewaConfig, submitEsewaPayment } from './lib/esewa'
 import { clubRepository, mockClubRepository } from './services/clubRepository'
 import type { ActivityLogEntry, AttendanceRecord, ClubEvent, ClubFile, ClubSnapshot, Donation, EventStatus, Member, Notification, Registration, Role } from './types'
+import ImageAccordion from "./components/ImageAccordion/ImageAccordion";
 import './App.css'
 
 type Page = 'home' | 'about' | 'events' | 'event-detail' | 'login' | 'register' | 'dashboard' | 'manage-events' | 'registrations' | 'attendance' | 'files' | 'donations' | 'users' | 'reports' | 'leaderboard' | 'notifications' | 'activity' | 'profile'
@@ -1048,11 +1049,8 @@ function LandingPage({ events, onNavigate, onEvent }: { events: ClubEvent[]; onN
         <p>Technology <span>·</span> Innovation <span>·</span> Community</p>
         <button className="button button-lime" onClick={() => onNavigate('events')}>Explore Events <ArrowRight size={16} /></button>
       </div>
-      <div className="home-hero-gallery" aria-label="BIM Club themes">
-        {homeHeroCards.map((card) => <article className="home-hero-card" key={card.title}>
-          <img src={card.image} alt={card.alt} />
-          <h2>{card.title}</h2>
-        </article>)}
+      <div className="hero-accordion">
+        <ImageAccordion label="BIM Club highlights" />
       </div>
     </section>
     <section className="landing-marquee"><span>LEARN BY MAKING</span><i /><span>FIND YOUR PEOPLE</span><i /><span>BUILD WHAT MATTERS</span><i /><span>LEARN BY MAKING</span></section>
